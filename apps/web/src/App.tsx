@@ -119,7 +119,8 @@ function AppShell() {
         <InstallBanner />
         <OfflineNotice />
         <HomeScreen onSubmit={search} busy={state.status === "loading"} error={state.status === "error" ? state.error : null} />
-        <Link to={PRIVACY_PATH} data-testid="home-privacy-link" className="self-center mt-auto pt-space-lg text-label-md font-label-md text-on-surface-variant underline underline-offset-2 hover:text-on-surface">
+        {/* Da lg fuori dal flusso: il blocco centrato della Home non deve spostarsi per fargli posto. */}
+        <Link to={PRIVACY_PATH} data-testid="home-privacy-link" className="self-center mt-auto pt-space-lg lg:absolute lg:bottom-28 lg:left-1/2 lg:-translate-x-1/2 lg:mt-0 lg:pt-0 lg:whitespace-nowrap text-label-md font-label-md text-on-surface-variant underline underline-offset-2 hover:text-on-surface">
           Privacy e note legali
         </Link>
       </main>
