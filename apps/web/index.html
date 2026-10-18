@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="it">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, viewport-fit=cover"
+    />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <!-- Font non bloccanti: il testo si vede subito con il font di sistema (display=swap) e passa ai font di marca appena arrivano. -->
+    <link
+      rel="preload"
+      as="style"
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@600;700;800&display=swap"
+    />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@600;700;800&display=swap"
+      rel="stylesheet"
+      media="print"
+      onload="this.media='all'"
+    />
+    <noscript>
+      <link
+        href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@600;700;800&display=swap"
+        rel="stylesheet"
+      />
+    </noscript>
+    <meta name="theme-color" content="#059669" />
+    <!-- SEO e anteprime social, in italiano, con la parola chiave di prodotto («carburante più conveniente lungo il percorso»).
+         og:url, og:image e canonical vogliono un indirizzo assoluto: li aggiunge vite.config.ts quando si conosce il dominio (VITE_SITE_URL). -->
+    <meta
+      name="description"
+      content="Inserisci partenza e arrivo: TappaFurba trova il distributore più economico lungo il percorso, calcolando prezzo, deviazione e tempo. Dati MIMIT Osservaprezzi."
+    />
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="TappaFurba" />
+    <meta property="og:locale" content="it_IT" />
+    <meta property="og:title" content="TappaFurba – Il carburante più conveniente lungo il percorso" />
+    <meta
+      property="og:description"
+      content="Partenza, arrivo e TappaFurba trova il distributore che fa davvero risparmiare: prezzo, deviazione e tempo in un solo conto."
+    />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:image:alt" content="TappaFurba: il carburante più conveniente lungo il percorso" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "WebApplication",
+        "name": "TappaFurba",
+        "description": "Trova il distributore di carburante più conveniente lungo il percorso, tenendo conto di prezzo, deviazione e tempo.",
+        "applicationCategory": "UtilitiesApplication",
+        "operatingSystem": "Any",
+        "inLanguage": "it",
+        "offers": { "@type": "Offer", "price": "0", "priceCurrency": "EUR" }
+      }
+    </script>
+    <link rel="icon" href="/favicon.ico" sizes="16x16 32x32" />
+    <!-- Il favicon SVG è il mark senza i puntini della rotta (illeggibili a 16 px): lo genera scripts/generate-icons.mjs. -->
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <!-- iOS: nome sotto l'icona dopo «Aggiungi a Home» -->
+    <meta name="apple-mobile-web-app-title" content="TappaFurba" />
+    <title>TappaFurba – Il carburante più conveniente lungo il percorso</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

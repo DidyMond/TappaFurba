@@ -1,0 +1,104 @@
+name: Bug report / Segnalazione bug
+description: Report something that does not work as expected / Segnala qualcosa che non funziona come previsto
+title: "[Bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Grazie per la segnalazione. Più i dati sono precisi (dove succede, passi per riprodurlo, **log**), più è rapido capire il problema.
+        *Thanks for reporting. The more precise the data (where it happens, steps to reproduce, **logs**), the faster the problem can be understood.*
+
+        **Sicurezza:** se hai trovato una vulnerabilità **non aprire una issue pubblica**: usa il link «Segnalazione di sicurezza» nella pagina di scelta del modulo.
+        *Security: if you found a vulnerability, **do not open a public issue**: use the "Security report" link on the template chooser page.*
+
+        **Privacy:** non incollare mai token (Mapbox `pk.…` / `sk.…`, `INGEST_TOKEN`), password o il contenuto dei file `.env`. Togli o arrotonda indirizzi di casa e coordinate precise da log e screenshot.
+        *Privacy: never paste tokens (Mapbox `pk.…` / `sk.…`, `INGEST_TOKEN`), passwords or the contents of `.env` files. Remove or round home addresses and precise coordinates from logs and screenshots.*
+  - type: dropdown
+    id: component
+    attributes:
+      label: Componente / Component
+      options:
+        - App web (schermate, mappa, PWA) / Web app (screens, map, PWA)
+        - API (ricerca, geocoding, routing) / API (search, geocoding, routing)
+        - Prezzi e ingestione dati MIMIT / Prices and MIMIT data ingestion
+        - Database (db/schema.sql)
+        - Documentazione / Documentation
+        - Non so / Not sure
+    validations:
+      required: true
+  - type: dropdown
+    id: where
+    attributes:
+      label: Dove lo vedi / Where you see it
+      options:
+        - Sviluppo in locale (pnpm dev) / Local development (pnpm dev)
+        - Istanza pubblicata / Deployed instance
+        - Test automatici (pnpm test, test:db, test:e2e) / Automated tests
+        - Altro / Other
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Versione / Version
+      description: Hash del commit (`git rev-parse --short HEAD`) o data dell'istanza pubblicata. / Commit hash or date of the deployed instance.
+      placeholder: "989936a"
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Ambiente / Environment
+      description: Browser e sistema operativo (app web), oppure Node, pnpm e sistema operativo (API, test). Per la PWA indica se è installata. / Browser and OS (web app), or Node, pnpm and OS (API, tests). For the PWA, say whether it is installed.
+      placeholder: "Safari su iOS 18, PWA installata / Node 24.1, pnpm 12.6, Ubuntu 24.04"
+    validations:
+      required: true
+  - type: textarea
+    id: description
+    attributes:
+      label: Cosa succede / What happens
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Come riprodurlo / Steps to reproduce
+      description: Se riguarda una ricerca, indica i luoghi in modo generico (città o via pubblica, non il tuo indirizzo di casa), il carburante e le impostazioni cambiate. / For a search, give places generically (city or public street, not your home address), the fuel and the settings you changed.
+      placeholder: |
+        1. …
+        2. …
+        3. …
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Comportamento atteso / Expected behaviour
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Log ed errori / Logs and errors
+      description: |
+        - **App web:** errori della console del browser (DevTools → Console) e richieste fallite (Network).
+        - **API:** le righe del log attorno al problema (`pnpm dev:api`), con qualche riga prima e dopo. I log non contengono gli indirizzi digitati né i token.
+        - **Test:** l'output del comando che fallisce.
+
+        *Web app: browser console errors and failed requests. API: the log lines around the problem. Tests: the failing command output.*
+      render: text
+  - type: textarea
+    id: extra
+    attributes:
+      label: Altro / Anything else
+      description: Screenshot, da quando succede, se è intermittente. / Screenshots, since when it happens, whether it is intermittent.
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Prima di inviare / Before submitting
+      options:
+        - label: Ho cercato fra le issue esistenti. / I searched the existing issues.
+          required: true
+        - label: Ho tolto token, password e dati personali da log e screenshot. / I removed tokens, passwords and personal data from logs and screenshots.
+          required: true

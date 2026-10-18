@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Segnalazione di sicurezza / Security report
+    url: https://github.com/DidyMond/TappaFurba/security/advisories/new
+    about: "Vulnerabilità e fughe di token: segnalale in privato, non in una issue pubblica. / Vulnerabilities and token leaks: report them privately, not in a public issue."
+  - name: Documentazione / Documentation
+    url: https://github.com/DidyMond/TappaFurba/blob/main/README.md
+    about: README, architettura e crediti prima di aprire una issue. / README, architecture and credits before opening an issue.

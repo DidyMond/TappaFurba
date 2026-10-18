@@ -1,0 +1,41 @@
+# Dipendenze
+node_modules/
+
+# Build
+dist/
+build/
+apps/*/dist/
+apps/*/build/
+apps/web/dist-e2e/
+packages/*/dist/
+
+# Variabili d'ambiente (i template sono i file .env.example)
+.env
+.env.*
+!.env.example
+
+# Log
+*.log
+npm-debug.log*
+pnpm-debug.log*
+
+# Editor e sistema operativo
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/extensions.json
+
+# Test e copertura
+coverage/
+apps/e2e/test-results/
+apps/e2e/playwright-report/
+
+# Vite
+.vite/
+
+# Documento privato, non pubblicato
+docs/DEPLOY.md
+
+# Script di deploy e configurazione del server: privati (host, percorsi), non pubblicati
+scripts/*.local*

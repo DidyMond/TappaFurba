@@ -1,0 +1,64 @@
+# CI di TappaFurba (Node 24, come in locale): un solo workflow e un solo job.
+# Esegue i test ermetici (zero rete, zero database: `pnpm test`), il typecheck, la build della PWA con la sua verifica e i test end-to-end
+# su Chromium (`pnpm test:e2e`: provider di prova e stazioni fittizie in memoria, quindi zero database e zero rete esterna).
+# I test su PostgreSQL (`pnpm test:db`) non girano qui: richiedono un database e si lanciano in locale.
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - "feat/*"
+
+permissions:
+  contents: read
+
+# Un nuovo push sullo stesso riferimento annulla la run precedente ancora in corso: meno minuti consumati.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      # La versione di pnpm viene da `packageManager` in package.json (12.6.0): non va ripetuta qui.
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - run: pnpm test
+
+      - run: pnpm typecheck
+
+      # PWA: la build di produzione deve produrre service worker, manifest e icone, con i dati mai in cache.
+      # Sono due step nello stesso job (circa 30 secondi): nessun job o workflow in più.
+      - run: pnpm --filter @tappafurba/web build
+      - run: pnpm --filter @tappafurba/web verify:pwa
+
+      # End-to-end: Playwright su Chromium con le dipendenze di sistema. Altri due step nello stesso job (nessun job o
+      # workflow in più): il browser si scarica a ogni run (~1 minuto) e i test durano circa 1-2 minuti. Chiamate esterne: nessuna
+      # (le richieste fuori da localhost sono bloccate dai test); il token Mapbox del browser è vuoto, quindi niente mappa.
+      - run: pnpm --filter @tappafurba/e2e exec playwright install --with-deps chromium
+      # Tetto di 8 minuti sullo step: i test durano circa 1-2 minuti, quindi uno step appeso non consuma i minuti del mese.
+      - run: pnpm test:e2e
+        timeout-minutes: 8
+
+      # Solo se i test e2e falliscono: rapporto e tracce per capire il perché senza rifare la run.
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-report
+          path: |
+            apps/e2e/playwright-report/
+            apps/e2e/test-results/
+          retention-days: 7

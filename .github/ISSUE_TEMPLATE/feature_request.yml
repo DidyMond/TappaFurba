@@ -1,0 +1,47 @@
+name: Feature request / Richiesta di funzionalità
+description: Suggest an idea or an improvement / Proponi un'idea o un miglioramento
+title: "[Idea] "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Grazie per l'idea. Spiegare il **problema** che vuoi risolvere aiuta più che descrivere la soluzione.
+        *Thanks for the idea. Explaining the **problem** you want to solve helps more than describing the solution.*
+  - type: textarea
+    id: problem
+    attributes:
+      label: Che problema vuoi risolvere / What problem do you want to solve
+      description: Cosa fai oggi e cosa ti manca. Un esempio concreto di viaggio o di ricerca aiuta. / What you do today and what is missing. A concrete trip or search example helps.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Cosa proponi / What you propose
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternative considerate / Alternatives considered
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area / Area
+      options:
+        - App web (schermate, mappa, PWA) / Web app (screens, map, PWA)
+        - Calcolo del risparmio e classifica / Savings calculation and ranking
+        - API / API
+        - Dati e prezzi / Data and prices
+        - Documentazione / Documentation
+        - Non so / Not sure
+    validations:
+      required: true
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Prima di inviare / Before submitting
+      options:
+        - label: Ho cercato fra le issue esistenti. / I searched the existing issues.
+          required: true

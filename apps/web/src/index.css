@@ -1,0 +1,194 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html,
+  body {
+    /* `100%` e non `100vw`: `vw` include la barra di scorrimento e, quando c'è, crea uno scorrimento orizzontale. */
+    width: 100%;
+    margin: 0;
+    padding: 0;
+  }
+
+  /*
+   * Con la barra di scorrimento classica (Windows/Linux) il blocco dello scorrimento dei fogli e dei dialoghi
+   * (`body { overflow: hidden }`) la fa sparire: la finestra si allarga di ~15 px e header e barra inferiore (fissi)
+   * si ricentrano di ~8 px. Con `stable` lo spazio della barra resta riservato anche quando non c'è: aprire e chiudere
+   * un foglio non cambia più il layout dello sfondo.
+   */
+  html {
+    scrollbar-gutter: stable;
+  }
+
+  body {
+    overscroll-behavior: none;
+  }
+}
+
+:root {
+  /*
+   * Barra inferiore flottante: distanza dal fondo, altezza (la misura BottomNav a ogni cambio di dimensione) e ingombro
+   * totale. I fogli che scendono dietro la barra (Risultati su mobile) lasciano questo spazio in fondo al contenuto.
+   */
+  --bottom-nav-offset: 1rem;
+  --bottom-nav-height: 62px;
+  --bottom-nav-clearance: calc(var(--bottom-nav-offset) + var(--bottom-nav-height));
+}
+
+@layer utilities {
+  /* Safe-area (notch) per header/bottom-nav fissi, vedi DESIGN.md §Header/Bottom Navigation. */
+  .pt-safe {
+    padding-top: env(safe-area-inset-top, 0px);
+  }
+  .pb-safe {
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+}
+
+@layer utilities {
+  /* Righe di chip e bottom sheet: scroll senza barre visibili (DESIGN.md — Scroll behavior). */
+  .no-scrollbar {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+}
+
+@layer components {
+  /*
+   * Sfocatura progressiva (DESIGN.md — CTA flottante): tre strati con sfocatura crescente verso il basso, ciascuno
+   * mascherato da un gradiente, così il contenuto che scorre sotto la CTA sfuma senza un bordo netto. Dove
+   * `backdrop-filter` non c'è resta solo la sfumatura verso il colore di superficie.
+   */
+  .progressive-blur {
+    pointer-events: none;
+    background: linear-gradient(to top, theme("colors.surface / 0.9"), theme("colors.surface / 0"));
+  }
+  .progressive-blur > span {
+    position: absolute;
+    inset: 0;
+    -webkit-backdrop-filter: blur(var(--blur));
+    backdrop-filter: blur(var(--blur));
+  }
+  .progressive-blur > span:nth-child(1) {
+    --blur: 2px;
+    -webkit-mask-image: linear-gradient(to top, #000 0%, #000 45%, transparent 75%);
+    mask-image: linear-gradient(to top, #000 0%, #000 45%, transparent 75%);
+  }
+  .progressive-blur > span:nth-child(2) {
+    --blur: 6px;
+    -webkit-mask-image: linear-gradient(to top, #000 0%, #000 25%, transparent 55%);
+    mask-image: linear-gradient(to top, #000 0%, #000 25%, transparent 55%);
+  }
+  .progressive-blur > span:nth-child(3) {
+    --blur: 14px;
+    -webkit-mask-image: linear-gradient(to top, #000 0%, transparent 35%);
+    mask-image: linear-gradient(to top, #000 0%, transparent 35%);
+  }
+}
+
+@layer components {
+  /*
+   * Slider ergonomico (vedi RangeInput): l'`<input type="range">` nativo resta (accessibilità), ma con bersaglio
+   * da dito. L'elemento è alto 44 px e trasparente: tutta la fascia è area di tocco; il binario è una riga di 6 px al
+   * centro; il cursore visibile misura 28 px (32 px con puntatore grossolano) e, mentre lo si tiene premuto, cresce di
+   * ~1,25 (come l'iOS). `--range-ratio` (0–1, impostato dal componente) disegna la parte percorsa del binario; il cursore
+   * è centrato sul valore a metà della propria larghezza, quindi il riempimento tiene conto di mezzo cursore.
+   */
+  .range-touch {
+    --thumb: 28px;
+    --track: 6px;
+    --range-ratio: 0;
+    --range-fill: calc(var(--thumb) / 2 + (100% - var(--thumb)) * var(--range-ratio));
+    -webkit-appearance: none;
+    appearance: none;
+    display: block;
+    width: 100%;
+    height: 44px;
+    margin: 0;
+    padding: 0;
+    background: transparent;
+    cursor: pointer;
+    touch-action: pan-y;
+    -webkit-tap-highlight-color: transparent;
+  }
+  @media (pointer: coarse) {
+    .range-touch {
+      --thumb: 32px;
+    }
+  }
+  .range-touch:focus {
+    outline: none;
+  }
+  .range-touch::-webkit-slider-runnable-track {
+    height: var(--track);
+    border-radius: 9999px;
+    background: linear-gradient(to right, theme("colors.primary") var(--range-fill), theme("colors.outline-variant / 0.6") var(--range-fill));
+  }
+  .range-touch::-moz-range-track {
+    height: var(--track);
+    border-radius: 9999px;
+    background: linear-gradient(to right, theme("colors.primary") var(--range-fill), theme("colors.outline-variant / 0.6") var(--range-fill));
+  }
+  .range-touch::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    box-sizing: border-box;
+    width: var(--thumb);
+    height: var(--thumb);
+    margin-top: calc((var(--track) - var(--thumb)) / 2);
+    border: 2px solid theme("colors.primary");
+    border-radius: 9999px;
+    background: theme("colors.surface-container-lowest");
+    box-shadow: 0 1px 4px rgb(0 0 0 / 0.25);
+    transition: transform 150ms ease-out, box-shadow 150ms ease-out;
+  }
+  .range-touch::-moz-range-thumb {
+    box-sizing: border-box;
+    width: var(--thumb);
+    height: var(--thumb);
+    border: 2px solid theme("colors.primary");
+    border-radius: 9999px;
+    background: theme("colors.surface-container-lowest");
+    box-shadow: 0 1px 4px rgb(0 0 0 / 0.25);
+    transition: transform 150ms ease-out, box-shadow 150ms ease-out;
+  }
+  /* `data-dragging` lo imposta RangeInput dal primo contatto al rilascio: `:active` da solo non è affidabile con il tocco. */
+  .range-touch:active::-webkit-slider-thumb,
+  .range-touch[data-dragging="true"]::-webkit-slider-thumb {
+    transform: scale(1.25);
+  }
+  .range-touch:active::-moz-range-thumb,
+  .range-touch[data-dragging="true"]::-moz-range-thumb {
+    transform: scale(1.25);
+  }
+  .range-touch:focus-visible::-webkit-slider-thumb {
+    box-shadow: 0 0 0 4px theme("colors.primary / 0.3"), 0 1px 4px rgb(0 0 0 / 0.25);
+  }
+  .range-touch:focus-visible::-moz-range-thumb {
+    box-shadow: 0 0 0 4px theme("colors.primary / 0.3"), 0 1px 4px rgb(0 0 0 / 0.25);
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .range-touch::-webkit-slider-thumb {
+      transition: none;
+    }
+    .range-touch::-moz-range-thumb {
+      transition: none;
+    }
+  }
+}
+
+@layer utilities {
+  /*
+   * Alone della barra di ricerca (Home): gradiente RADIALE centrato con tre colori del tema
+   * (primary-fixed/40 → primary/25 → secondary-fixed/30). Un gradiente lineare sarebbe asimmetrico (verde a sinistra,
+   * azzurro chiaro a destra, e il verde pesa di più sullo sfondo): l'alone sembrava spostato a sinistra anche con riquadro
+   * simmetrico. Radiale dal centro, l'alone è simmetrico per costruzione.
+   */
+  .bg-glow-radial {
+    background-image: radial-gradient(ellipse at center, theme("colors.primary-fixed / 0.4") 0%, theme("colors.primary / 0.25") 50%, theme("colors.secondary-fixed / 0.3") 100%);
+  }
+}
