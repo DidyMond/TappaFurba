@@ -1,3 +1,4 @@
+import { NEARBY_RADIUS_KM } from "@tappafurba/shared";
 import { Writable } from "node:stream";
 import type { FastifyInstance } from "fastify";
 import { afterEach, describe, expect, it } from "vitest";
@@ -537,5 +538,49 @@ describe("POST /nearby — «Intorno a me»", () => {
     const logs = lines.join("");
     expect(logs).not.toContain("9.123456");
     expect(logs).not.toContain("45.654321");
+  });
+});
+
+describe("POST /nearby — il raggio accettato coincide con quello dello slider (NEARBY_RADIUS_KM)", () => {
+  const body = (radiusKm: number) => ({ origin: { lon: 9.0, lat: 45.0 }, fuelType: "benzina", radiusKm });
+  const wide = () =>
+    makeApp({
+      searchService: new SearchService({
+        routing: new MockRoutingProvider(),
+        // Abbastanza stazioni (a ~1,1 / 2,2 / 3,3 km) per non cadere in NO_PRICE_DATA con qualunque raggio ≥ 4 km.
+        repository: new InMemoryStationRepository([
+          row({ stationId: 51, lon: 9.0, lat: 45.01, price: 1.8 }),
+          row({ stationId: 52, lon: 9.0, lat: 45.02, price: 1.82 }),
+          row({ stationId: 53, lon: 9.0, lat: 45.03, price: 1.84 }),
+        ]),
+        budget: { status: async () => "ok" },
+        sessions: new SearchSessionStore(),
+      }),
+    });
+
+  it("accetta gli estremi condivisi (min e max) e il valore predefinito", async () => {
+    const app = await wide();
+    for (const radiusKm of [NEARBY_RADIUS_KM.max, NEARBY_RADIUS_KM.max - 1]) {
+      const res = await app.inject({ method: "POST", url: "/nearby", payload: body(radiusKm) });
+      expect(res.statusCode, `raggio ${radiusKm}`).toBe(200);
+      expect(res.json().nearby.radiusKm).toBe(radiusKm);
+    }
+    const noRadius = await app.inject({ method: "POST", url: "/nearby", payload: { origin: { lon: 9.0, lat: 45.0 }, fuelType: "benzina" } });
+    expect(noRadius.json().nearby.radiusKm).toBe(NEARBY_RADIUS_KM.default);
+  });
+
+  it("il minimo condiviso (1 km) è valido anche se lì non c'è abbastanza prezzo: l'errore è dei dati (422), non del raggio (400)", async () => {
+    const res = await (await wide()).inject({ method: "POST", url: "/nearby", payload: body(NEARBY_RADIUS_KM.min) });
+    expect(res.statusCode).toBe(422);
+    expect(res.json().error.code).toBe("NO_PRICE_DATA");
+  });
+
+  it("rifiuta (400) ciò che lo slider non può esprimere: appena sopra il massimo e appena sotto il minimo", async () => {
+    const app = await wide();
+    for (const radiusKm of [NEARBY_RADIUS_KM.max + 0.1, NEARBY_RADIUS_KM.min - 0.1, NEARBY_RADIUS_KM.max + 1, 0, -1]) {
+      const res = await app.inject({ method: "POST", url: "/nearby", payload: body(radiusKm) });
+      expect(res.statusCode, `raggio ${radiusKm}`).toBe(400);
+      expect(res.json().error.code).toBe("VALIDATION_ERROR");
+    }
   });
 });

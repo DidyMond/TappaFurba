@@ -1,3 +1,4 @@
+import { NEARBY_RADIUS_KM } from "@tappafurba/shared";
 import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -623,6 +624,27 @@ describe("SearchForm — modalità «Intorno a me»", () => {
     expect(screen.getByLabelText("Raggio di ricerca")).toHaveValue("5");
     expect(screen.getByLabelText("Raggio di ricerca")).toHaveAttribute("min", "1");
     expect(screen.getByLabelText("Raggio di ricerca")).toHaveAttribute("max", "10");
+  });
+
+  it("coerenza con l'API: gli estremi e il valore iniziale dello slider sono quelli condivisi (NEARBY_RADIUS_KM), gli stessi che l'API accetta", async () => {
+    const user = userEvent.setup();
+    renderForm();
+    await user.click(screen.getByTestId("mode-nearby"));
+    const slider = screen.getByLabelText("Raggio di ricerca");
+    expect(slider).toHaveAttribute("min", String(NEARBY_RADIUS_KM.min));
+    expect(slider).toHaveAttribute("max", String(NEARBY_RADIUS_KM.max));
+    expect(slider).toHaveValue(String(NEARBY_RADIUS_KM.default));
+  });
+
+  it("il valore massimo dello slider arriva nella richiesta così com'è (l'API lo accetta, nessun ritocco)", async () => {
+    const user = userEvent.setup();
+    const onSubmit = renderForm();
+    await user.click(screen.getByTestId("mode-nearby"));
+    await user.type(screen.getByPlaceholderText("Dove sei? Scrivi un indirizzo o usa il mirino"), "via esempio");
+    await user.click((await screen.findAllByRole("option"))[0]!);
+    fireEvent.change(screen.getByLabelText("Raggio di ricerca"), { target: { value: String(NEARBY_RADIUS_KM.max) } });
+    await user.click(screen.getByRole("button", { name: "Trova il carburante più conveniente" }));
+    expect(onSubmit.mock.calls[0]![0]).toMatchObject({ radiusKm: NEARBY_RADIUS_KM.max });
   });
 
   it("il pulsante resta spento finché non c'è un punto di partenza scelto dai suggerimenti (la destinazione non serve)", async () => {

@@ -1,4 +1,4 @@
-import type { NearbyRequest, SearchRequest } from "@tappafurba/shared";
+import { NEARBY_RADIUS_KM, type NearbyRequest, type SearchRequest } from "@tappafurba/shared";
 import { z } from "zod";
 
 const lonLat = z.object({
@@ -20,10 +20,10 @@ const searchOptionsShape = {
   referencePriceOverride: z.number().min(0.5).max(4).optional(),
 };
 
-/** Raggio di «Intorno a me» (km): come il MIMIT, predefinito 5 e massimo 10. */
-export const MIN_NEARBY_RADIUS_KM = 1;
-export const MAX_NEARBY_RADIUS_KM = 10;
-export const DEFAULT_NEARBY_RADIUS_KM = 5;
+/** Raggio di «Intorno a me» (km): i limiti stanno in `@tappafurba/shared`, gli stessi dello slider del frontend. */
+export const MIN_NEARBY_RADIUS_KM = NEARBY_RADIUS_KM.min;
+export const MAX_NEARBY_RADIUS_KM = NEARBY_RADIUS_KM.max;
+export const DEFAULT_NEARBY_RADIUS_KM = NEARBY_RADIUS_KM.default;
 
 export const searchRequestSchema = z
   .object({

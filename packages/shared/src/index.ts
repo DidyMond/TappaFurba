@@ -96,12 +96,18 @@ export interface SearchRequest extends SearchOptions {
 }
 
 /**
+ * Raggio di «Intorno a me», in km: fonte unica per lo slider del frontend e per la validazione dell'API (come il MIMIT,
+ * predefinito 5 e massimo 10). Il frontend può così esprimere solo ciò che l'API accetta.
+ */
+export const NEARBY_RADIUS_KM = { min: 1, max: 10, default: 5 } as const;
+
+/**
  * «Intorno a me»: ricerca attorno a un punto (GPS o indirizzo). Non c'è un percorso di riferimento: il costo del
  * tragitto è quello del giro completo origin→stazione→origin.
  */
 export interface NearbyRequest extends SearchOptions {
   origin: LonLat;
-  /** Raggio di ricerca, km in linea d'aria dal punto (come il MIMIT: predefinito 5, massimo 10). */
+  /** Raggio di ricerca, km in linea d'aria dal punto (limiti in `NEARBY_RADIUS_KM`). */
   radiusKm: number;
 }
 
