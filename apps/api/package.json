@@ -9,6 +9,7 @@
     "migrate": "tsx src/db/migrate.ts",
     "ingest": "tsx src/ingestion/cli.ts",
     "diagnose": "tsx scripts/diagnose-station.ts",
+    "calibrate-proxy": "tsx scripts/calibrate-nearby-proxy.ts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:db": "vitest run --config vitest.db.config.ts"
