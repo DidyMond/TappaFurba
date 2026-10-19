@@ -22,8 +22,10 @@ const fake = vi.hoisted(() => {
 
   class FakeBounds {
     points: Array<[number, number]> = [];
-    constructor() {
+    constructor(southWest?: [number, number], northEast?: [number, number]) {
       state.boundsPoints.push(this.points);
+      if (southWest) this.points.push(southWest);
+      if (northEast) this.points.push(northEast);
     }
     extend(point: [number, number]) {
       this.points.push(point);
@@ -253,8 +255,9 @@ describe("MapCanvas — logo della bandiera accanto al prezzo", () => {
 });
 
 describe("MapCanvas — tema della mappa", () => {
-  const ROUTE_SOURCES = 2;
-  const ROUTE_LAYERS = 6;
+  // Cerchio di ricerca («Intorno a me», vuoto in viaggio) + rotta + percorso con sosta.
+  const ROUTE_SOURCES = 3;
+  const ROUTE_LAYERS = 8;
   const failure = (status: number, url: string) => ({ error: { status, url } });
 
   it("senza una scelta salvata parte con Light; con una scelta salvata parte con quella", () => {
@@ -273,7 +276,7 @@ describe("MapCanvas — tema della mappa", () => {
     expect(fake.state.maps[0]!.options.style).toBe(MAP_STYLES.light.mapboxUrl);
   });
 
-  it("al primo caricamento aggiunge la rotta in un'unica esecuzione (2 sorgenti, 6 livelli): lo style.load iniziale non la duplica", () => {
+  it("al primo caricamento aggiunge la rotta in un'unica esecuzione (3 sorgenti, 8 livelli): lo style.load iniziale non la duplica", () => {
     render(<MapCanvas {...props} />);
     const map = fake.state.maps[0]!;
     map.handlers["style.load"]!(); // arriva prima di «load»: la rotta non c'è ancora da ricreare
@@ -282,6 +285,8 @@ describe("MapCanvas — tema della mappa", () => {
     expect(map.addSource).toHaveBeenCalledTimes(ROUTE_SOURCES);
     expect(map.addLayer).toHaveBeenCalledTimes(ROUTE_LAYERS);
     expect(map.addLayer.mock.calls.map(([layer]) => layer.id)).toEqual([
+      "search-area-fill",
+      "search-area-line",
       "route-glow",
       "route-casing",
       "route-line",
@@ -379,5 +384,56 @@ describe("MapCanvas — tema della mappa", () => {
     map.handlers.error!(failure(401, "https://api.mapbox.com/v4/mapbox.mapbox-streets-v8/10/1/1.vector.pbf"));
     expect(onUnavailable).toHaveBeenCalledTimes(1);
     expect(map.setStyle).not.toHaveBeenCalled();
+  });
+});
+
+describe("MapCanvas — «Intorno a me» (nessun tracciato: punto di partenza e raggio)", () => {
+  const nearbyProps = { ...props, geometry: [] as Array<[number, number]>, center: [9.2, 45.4] as const, radiusKm: 5 };
+
+  it("inquadra il cerchio di ricerca attorno al punto: ±raggio in latitudine e in longitudine", () => {
+    render(<MapCanvas {...nearbyProps} />);
+    const map = fake.state.maps[0]!;
+    map.handlers.load!();
+
+    // Il rettangolo creato all'avvio e quello di fitBounds: sudovest e nordest attorno a (9,2 / 45,4), raggio 5 km.
+    const [southWest, northEast] = fake.state.boundsPoints.find((points) => points.length === 2)!;
+    const dLat = 5 / 111.19;
+    const dLon = dLat / Math.cos((45.4 * Math.PI) / 180);
+    expect(southWest![0]).toBeCloseTo(9.2 - dLon, 6);
+    expect(southWest![1]).toBeCloseTo(45.4 - dLat, 6);
+    expect(northEast![0]).toBeCloseTo(9.2 + dLon, 6);
+    expect(northEast![1]).toBeCloseTo(45.4 + dLat, 6);
+    expect(map.fitBounds).toHaveBeenCalled();
+  });
+
+  it("disegna il cerchio di ricerca (riempimento e bordo tratteggiato) e un solo pallino, dove sei", () => {
+    render(<MapCanvas {...nearbyProps} />);
+    const map = fake.state.maps[0]!;
+    map.handlers.load!();
+
+    expect(map.addSource.mock.calls.map(([id]) => id)).toEqual(["search-area", "route", "stop-route"]);
+    expect(map.addLayer.mock.calls.slice(0, 2).map(([layer]) => layer.id)).toEqual(["search-area-fill", "search-area-line"]);
+    const area = map.addSource.mock.calls[0]![1].data;
+    expect(area.features).toHaveLength(1);
+    expect(area.features[0].geometry.type).toBe("Polygon");
+    expect(area.features[0].geometry.coordinates[0]).toHaveLength(65); // 64 lati, anello chiuso
+    expect(fake.state.pinElements).toHaveLength(1); // in viaggio sono due (partenza e arrivo)
+  });
+
+  it("in «In viaggio» il cerchio resta vuoto e i pallini sono due (partenza e arrivo)", () => {
+    render(<MapCanvas {...props} />);
+    const map = fake.state.maps[0]!;
+    map.handlers.load!();
+
+    expect(map.addSource.mock.calls[0]![0]).toBe("search-area");
+    expect(map.addSource.mock.calls[0]![1].data.features).toEqual([]);
+    expect(fake.state.pinElements).toHaveLength(2);
+  });
+
+  it("il pulsante di ricentratura dice «Ricentra su di te» solo in «Intorno a me»", () => {
+    const { getByRole, rerender } = render(<MapCanvas {...nearbyProps} />);
+    expect(getByRole("button", { name: "Ricentra su di te" })).toBeInTheDocument();
+    rerender(<MapCanvas {...props} />);
+    expect(getByRole("button", { name: "Ricentra il percorso" })).toBeInTheDocument();
   });
 });

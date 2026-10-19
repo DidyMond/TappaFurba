@@ -62,6 +62,13 @@ const submit = async (user: ReturnType<typeof userEvent.setup>) => {
   await user.click(screen.getByRole("button", { name: "Trova il carburante più conveniente" }));
 };
 
+/** Con il selettore «In viaggio / Intorno a me» in cima al form, il primo campo di testo non è più il primo elemento raggiungibile con Tab. */
+async function tabToOriginInput(user: ReturnType<typeof userEvent.setup>) {
+  const input = screen.getByPlaceholderText("Da dove parti?");
+  for (let i = 0; i < 6 && document.activeElement !== input; i++) await user.tab();
+  expect(input).toHaveFocus();
+}
+
 const settings = (patch: Partial<Settings>): Settings => ({ ...FACTORY_SETTINGS, ...patch });
 
 describe("SearchForm — precompilazione dalle Impostazioni", () => {
@@ -519,7 +526,7 @@ describe("SearchForm — focus e controlli del foglio (revisione grafica 2)", ()
   it("focus da tastiera (Tab): anello ring-2 ring-secondary/60 SOLO sul contenitore del testo, mai sulla colonna dei pallini; sparisce al blur", async () => {
     const user = userEvent.setup();
     renderForm();
-    await user.tab();
+    await tabToOriginInput(user);
     const input = screen.getByPlaceholderText("Da dove parti?");
     expect(input).toHaveFocus();
     const row = input.closest('[data-testid="address-row"]') as HTMLElement;
@@ -536,7 +543,7 @@ describe("SearchForm — focus e controlli del foglio (revisione grafica 2)", ()
   it("dopo un tasto, un tap su un altro campo non mostra l'anello (conta l'ultima interazione prima del focus)", async () => {
     const user = userEvent.setup();
     renderForm();
-    await user.tab(); // tastiera → partenza con anello
+    await tabToOriginInput(user); // tastiera → partenza con anello
     await user.click(screen.getByPlaceholderText("Dove stai andando?")); // tap → destinazione senza anello
     const dest = screen.getByPlaceholderText("Dove stai andando?").closest('[data-testid="address-field"]') as HTMLElement;
     expect(dest).toHaveAttribute("data-keyboard-focus", "false");
@@ -581,5 +588,90 @@ describe("SearchForm — focus e controlli del foglio (revisione grafica 2)", ()
       "transition-transform", "duration-300", "group-hover:rotate-180", "group-active:rotate-180", "group-hover:bg-primary-fixed/30", "group-hover:text-primary",
     );
     expect(screen.getByRole("button", { name: "Scambia partenza e destinazione" })).toHaveClass("group"); // l'hover vale su tutta l'area di tocco
+  });
+});
+
+describe("SearchForm — modalità «Intorno a me»", () => {
+  const nearby = (user: ReturnType<typeof userEvent.setup>) => user.click(screen.getByTestId("mode-nearby"));
+
+  async function chooseOrigin(user: ReturnType<typeof userEvent.setup>) {
+    await user.type(screen.getByPlaceholderText("Dove sei? Scrivi un indirizzo o usa il mirino"), "via esempio");
+    await user.click((await screen.findAllByRole("option"))[0]!);
+  }
+
+  it("parte da «In viaggio»: due segmenti, con quello attivo segnalato come selezionato", () => {
+    renderForm();
+    expect(screen.getByRole("radiogroup", { name: "Modalità di ricerca" })).toBeInTheDocument();
+    expect(screen.getByRole("radio", { name: "In viaggio" })).toBeChecked();
+    expect(screen.getByRole("radio", { name: "Intorno a me" })).not.toBeChecked();
+    expect(screen.getByTestId("route-card")).toBeInTheDocument();
+    expect(screen.getByLabelText("Deviazione massima")).toBeInTheDocument();
+  });
+
+  it("«Intorno a me»: sparisce la destinazione (e lo scambio), compare un solo campo e il raggio di ricerca (5 km)", async () => {
+    const user = userEvent.setup();
+    renderForm();
+    await nearby(user);
+
+    expect(screen.getByRole("radio", { name: "Intorno a me" })).toBeChecked();
+    expect(screen.queryByTestId("route-card")).not.toBeInTheDocument();
+    expect(screen.queryByPlaceholderText("Dove stai andando?")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Scambia partenza e destinazione" })).not.toBeInTheDocument();
+    expect(screen.getByTestId("nearby-card")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Usa la posizione attuale" })).toBeInTheDocument();
+    expect(screen.queryByLabelText("Deviazione massima")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Raggio di ricerca")).toHaveValue("5");
+    expect(screen.getByLabelText("Raggio di ricerca")).toHaveAttribute("min", "1");
+    expect(screen.getByLabelText("Raggio di ricerca")).toHaveAttribute("max", "10");
+  });
+
+  it("il pulsante resta spento finché non c'è un punto di partenza scelto dai suggerimenti (la destinazione non serve)", async () => {
+    const user = userEvent.setup();
+    renderForm();
+    await nearby(user);
+    const button = screen.getByRole("button", { name: "Trova il carburante più conveniente" });
+    expect(button).toBeDisabled();
+    expect(screen.getByText("Scegli un indirizzo dai suggerimenti o usa la tua posizione per iniziare.")).toBeInTheDocument();
+
+    await chooseOrigin(user);
+    expect(button).toBeEnabled();
+  });
+
+  it("invia una richiesta «Intorno a me»: punto, raggio e parametri del veicolo, senza destinazione né deviazione", async () => {
+    const user = userEvent.setup();
+    const onSubmit = renderForm();
+    await nearby(user);
+    await chooseOrigin(user);
+    fireEvent.change(screen.getByLabelText("Raggio di ricerca"), { target: { value: "8" } });
+    await user.click(screen.getByRole("button", { name: "Trova il carburante più conveniente" }));
+
+    expect(onSubmit).toHaveBeenCalledTimes(1);
+    const [request, labels] = onSubmit.mock.calls[0]!;
+    expect(request).toMatchObject({ origin: { lon: 9.15, lat: 45.55 }, radiusKm: 8, fuelType: "benzina", liters: 45, consumptionKmPerLiter: 15 });
+    expect(request).not.toHaveProperty("destination");
+    expect(request).not.toHaveProperty("maxDetourKm");
+    expect(labels).toMatchObject({ destination: "" });
+    expect(labels.origin).toContain("Via Esempio 12");
+  });
+
+  it("tornando a «In viaggio» il punto scelto resta e serve la destinazione", async () => {
+    const user = userEvent.setup();
+    renderForm();
+    await nearby(user);
+    await chooseOrigin(user);
+    await user.click(screen.getByTestId("mode-route"));
+
+    expect(screen.getByPlaceholderText("Da dove parti?")).toHaveValue(suggestions[0]!.label);
+    expect(screen.getByRole("button", { name: "Trova il carburante più conveniente" })).toBeDisabled();
+  });
+
+  it("una ricerca «In viaggio» continua a inviare destinazione e deviazione, senza raggio", async () => {
+    const user = userEvent.setup();
+    const onSubmit = renderForm();
+    await submit(user);
+    const request = onSubmit.mock.calls[0]![0];
+    expect(request).toHaveProperty("destination");
+    expect(request).toHaveProperty("maxDetourKm");
+    expect(request).not.toHaveProperty("radiusKm");
   });
 });

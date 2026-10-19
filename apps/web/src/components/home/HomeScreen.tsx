@@ -1,9 +1,9 @@
-import type { SearchRequest } from "@tappafurba/shared";
 import { useCallback, useState } from "react";
 import { useIsDesktop } from "../../hooks/useMediaQuery";
 import type { SearchLabels } from "../../hooks/useSearch";
 import type { ApiError } from "../../lib/api";
 import { useRecentRoutes, type RecentRoute } from "../../lib/recentRoutes";
+import type { AnySearchRequest } from "../../lib/searchMode";
 import { SearchIcon, SavingsIcon, SpinnerIcon, VerifiedIcon } from "../icons";
 import { SearchError } from "../SearchError";
 import { SearchForm, type SearchPrefill } from "../SearchForm";
@@ -11,7 +11,7 @@ import { FrequentRoutes } from "./FrequentRoutes";
 import { SearchSheet } from "./SearchSheet";
 
 interface HomeScreenProps {
-  onSubmit: (request: SearchRequest, labels: SearchLabels) => void;
+  onSubmit: (request: AnySearchRequest, labels: SearchLabels) => void;
   busy: boolean;
   error: ApiError | null;
 }

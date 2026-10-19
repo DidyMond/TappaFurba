@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { makeDivergingResults, makeResult, makeResults, makeTiedDetourResults } from "../test/fixtures";
-import { applyFilters, bestStationId, brandInitials, fuelModeLabel, shortPlaceName } from "./stationView";
+import { applyFilters, bestStationId, brandInitials, fuelModeLabel, referenceLevelText, shortPlaceName } from "./stationView";
 
 const ids = (results: ReturnType<typeof makeResults>) => results.map((r) => r.station.id);
 const noFilters = { onlySelf: false, motorwayOnly: false };
@@ -115,5 +115,22 @@ describe("fuelModeLabel", () => {
     expect(fuelModeLabel("benzina", true)).toBe("Benzina Self");
     expect(fuelModeLabel("diesel", false)).toBe("Diesel Servito");
     expect(fuelModeLabel("gpl", false)).toBe("GPL Servito");
+  });
+});
+
+describe("referenceLevelText", () => {
+  it("descrive i livelli del percorso come prima", () => {
+    expect(referenceLevelText("on_route", 40)).toBe("prezzo tipico di 40 stazioni sul percorso");
+    expect(referenceLevelText("corridor", 9)).toBe("prezzo tipico di 9 stazioni vicine al percorso");
+    expect(referenceLevelText("national", 500)).toBe("prezzo tipico nazionale, poche stazioni sul tratto");
+    expect(referenceLevelText("manual", 0)).toBe("impostato da te nelle Impostazioni");
+  });
+
+  it("«Intorno a me»: il livello «area» parla di stazioni nel raggio di ricerca", () => {
+    expect(referenceLevelText("area", 12, true)).toBe("prezzo tipico di 12 stazioni nel raggio di ricerca");
+  });
+
+  it("il ripiego nazionale non parla di «tratto» quando non c'è un percorso", () => {
+    expect(referenceLevelText("national", 500, true)).toBe("prezzo tipico nazionale, poche stazioni in zona");
   });
 });

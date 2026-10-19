@@ -3,11 +3,14 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SearchState } from "../../hooks/useSearch";
 import { brandLogoUrl } from "../../lib/brandLogos";
-import { makeDivergingResults, makeResponse, makeResult, makeTiedDetourResults, REQUEST } from "../../test/fixtures";
+import { makeDivergingResults, makeNearbyResponse, makeResponse, makeResult, makeTiedDetourResults, NEARBY_REQUEST, REQUEST } from "../../test/fixtures";
 import type { MapStation } from "./MapCanvas";
 
 // Mapbox GL richiede WebGL, assente in jsdom: la mappa è sostituita da uno stub che espone le props ricevute.
 interface StubProps {
+  geometry: ReadonlyArray<[number, number]>;
+  center?: readonly [number, number] | null;
+  radiusKm?: number;
   stations: MapStation[];
   selectedId: number | null;
   stopRoute: ReadonlyArray<[number, number]> | null;
@@ -889,5 +892,124 @@ describe("ResultsScreen — percorso con sosta (A→stazione→B)", () => {
     await user.click(screen.getByRole("button", { name: "Autostrada" }));
     expect(mapProps.current?.selectedId).toBeNull();
     expect(mapProps.current?.stopRoute).toBeNull();
+  });
+});
+
+describe("ResultsScreen — «Intorno a me»", () => {
+  const nearbyState = (results = makeNearbyResponse().results, extra: Partial<SuccessState> = {}): SuccessState => {
+    const response = makeNearbyResponse({ results });
+    return makeState({
+      response,
+      results,
+      request: NEARBY_REQUEST,
+      labels: { origin: "Via Roma 1, 20100 Milano città metropolitana di Milano, Italia", destination: "" },
+      ...extra,
+    });
+  };
+
+  it("la mappa non riceve un tracciato ma il punto di partenza e il raggio", () => {
+    render(<ResultsScreen state={nearbyState()} />);
+    expect(mapProps.current!.geometry).toEqual([]);
+    expect(mapProps.current!.center).toEqual([9.204, 45.4864]);
+    expect(mapProps.current!.radiusKm).toBe(5);
+  });
+
+  it("«In viaggio» continua a passare il tracciato alla mappa, senza punto né raggio", () => {
+    render(<ResultsScreen state={makeState()} />);
+    expect(mapProps.current!.geometry.length).toBeGreaterThan(0);
+    expect(mapProps.current!.center).toBeNull();
+    expect(mapProps.current!.radiusKm).toBeUndefined();
+  });
+
+  it("la capsula dice dove sei, il raggio e quante stazioni (niente tratta, distanza e durata)", () => {
+    render(<ResultsScreen state={nearbyState()} />);
+    const capsule = screen.getByTestId("nearby-capsule");
+    expect(capsule).toHaveTextContent("Intorno a Milano");
+    expect(capsule).toHaveTextContent("entro 5 km");
+    expect(capsule).toHaveTextContent(/\d+ staz\./);
+    expect(capsule).not.toHaveTextContent("→");
+  });
+
+  it("l'elenco è «Stazioni intorno a te» e il secondo ordinamento è «Più vicina» (non «Minor deviazione»)", () => {
+    render(<ResultsScreen state={nearbyState()} />);
+    expect(screen.getByRole("region", { name: "Stazioni intorno a te" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Più vicina/ })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Minor deviazione/ })).not.toBeInTheDocument();
+  });
+
+  it("«Più vicina» ordina per strada da fare", async () => {
+    const user = userEvent.setup();
+    const results = [
+      makeResult({ station: { id: 1, nomeImpianto: "Lontana" }, detourKm: 8, netSavings: 5 }),
+      makeResult({ station: { id: 2, nomeImpianto: "Vicina" }, detourKm: 2, netSavings: 3 }),
+    ];
+    render(<ResultsScreen state={nearbyState(results)} />);
+    expect(within(screen.getByRole("list", { name: "Elenco stazioni" })).getAllByTestId("station-card")[0]).toHaveTextContent("Lontana");
+    await user.click(screen.getByRole("button", { name: /Più vicina/ }));
+    expect(within(screen.getByRole("list", { name: "Elenco stazioni" })).getAllByTestId("station-card")[0]).toHaveTextContent("Vicina");
+  });
+
+  it("il prezzo di riferimento è descritto come prezzo tipico delle stazioni nel raggio di ricerca", () => {
+    render(<ResultsScreen state={nearbyState()} />);
+    expect(screen.getByTestId("reference-price")).toHaveTextContent("prezzo tipico di 12 stazioni nel raggio di ricerca");
+  });
+
+  it("la scheda mostra la distanza di sola andata (metà del giro) e il giro andata e ritorno in fondo, non la posizione sul percorso", () => {
+    const results = [makeResult({ station: { id: 1 }, detourKm: 4.2, detourMinutes: 8, detourSource: "routing", netSavings: 3 })];
+    render(<ResultsScreen state={nearbyState(results)} />);
+    const card = screen.getByTestId("station-card");
+    expect(card).toHaveTextContent("a 2,1 km (4 min)");
+    expect(card).toHaveTextContent("Andata e ritorno 4,2 km");
+    expect(card).not.toHaveTextContent("dalla partenza");
+    expect(card).not.toHaveTextContent("+4,2 km");
+  });
+
+  it("con la distanza ancora stimata compare la tilde, come per le deviazioni", () => {
+    const results = [makeResult({ station: { id: 1 }, detourKm: 4.2, detourMinutes: 8, detourSource: "proxy", netSavings: 3 })];
+    render(<ResultsScreen state={nearbyState(results)} />);
+    expect(screen.getByTestId("station-card")).toHaveTextContent("a ~2,1 km (~4 min)");
+    expect(screen.getByTestId("station-card")).toHaveTextContent("Andata e ritorno ~4,2 km");
+  });
+
+  it("«Nessuna stazione conviene…»: compare solo se nessuna stazione fa risparmiare, e l'elenco resta sotto", () => {
+    const losing = [makeResult({ station: { id: 1 }, netSavings: -0.4 }), makeResult({ station: { id: 2 }, netSavings: -1.2 })];
+    render(<ResultsScreen state={nearbyState(losing)} />);
+    expect(screen.getByTestId("no-savings-notice")).toHaveTextContent("Nessuna stazione conviene rispetto al prezzo medio della zona");
+    expect(screen.getAllByTestId("station-card")).toHaveLength(2);
+  });
+
+  it("non compare se almeno una stazione fa risparmiare, né quando l'elenco è vuoto", () => {
+    const { unmount } = render(
+      <ResultsScreen state={nearbyState([makeResult({ station: { id: 1 }, netSavings: 0.5 }), makeResult({ station: { id: 2 }, netSavings: -2 })])} />,
+    );
+    expect(screen.queryByTestId("no-savings-notice")).not.toBeInTheDocument();
+    unmount();
+    render(<ResultsScreen state={nearbyState([])} />);
+    expect(screen.queryByTestId("no-savings-notice")).not.toBeInTheDocument();
+  });
+
+  it("in «In viaggio» l'avviso non c'è mai, anche se nessuna stazione conviene", () => {
+    const losing = [makeResult({ station: { id: 1 }, netSavings: -1 })];
+    render(<ResultsScreen state={makeState({ response: makeResponse({ results: losing }), results: losing })} />);
+    expect(screen.queryByTestId("no-savings-notice")).not.toBeInTheDocument();
+  });
+
+  it("senza stazioni nel raggio suggerisce di allargare il raggio, non la deviazione", () => {
+    render(<ResultsScreen state={nearbyState([])} />);
+    expect(screen.getByText("Nessuna stazione nel raggio di ricerca")).toBeInTheDocument();
+    expect(screen.getByText(/aumentare il raggio di ricerca/)).toBeInTheDocument();
+    expect(screen.queryByText(/deviazione massima/)).not.toBeInTheDocument();
+  });
+
+  it("durante la verifica parla di distanze reali, non di deviazioni", () => {
+    const state = nearbyState(undefined, { refinement: { status: "pending" } });
+    render(<ResultsScreen state={state} />);
+    expect(screen.getByText("Calcolo le distanze reali delle migliori stazioni…")).toBeInTheDocument();
+  });
+
+  it("senza routing le distanze restano stime e lo dice con le stesse parole", () => {
+    const state = nearbyState(undefined, { refinement: { status: "skipped", reason: "budget_hard_limit" } });
+    render(<ResultsScreen state={state} />);
+    expect(screen.getByText("Distanze stimate (il calcolo sul percorso reale è sospeso).")).toBeInTheDocument();
   });
 });

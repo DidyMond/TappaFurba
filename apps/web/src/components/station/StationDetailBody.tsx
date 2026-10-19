@@ -87,7 +87,9 @@ export function StationDetailBody({
       <ImpactBento detail={detail} />
       <PriceMatrix detail={detail} wide={wide} />
       <p className="text-body-sm font-body-sm text-on-surface-variant text-center px-gutter tabular-nums">
-        A {formatKm(detail.alongRouteKm)} dalla partenza, a {formatKm(detail.lateralDistanceKm)} dal percorso diretto.
+        {detail.mode === "nearby"
+          ? `A ${formatKm(detail.lateralDistanceKm)} in linea d'aria da te.`
+          : `A ${formatKm(detail.alongRouteKm)} dalla partenza, a ${formatKm(detail.lateralDistanceKm)} dal percorso diretto.`}
       </p>
     </>
   );

@@ -5,6 +5,7 @@ import type { SearchState } from "../../hooks/useSearch";
 import { useStopRoute } from "../../hooks/useStopRoute";
 import { formatPrice } from "../../lib/format";
 import { launchNavigation } from "../../lib/navigation";
+import { isNearbyResponse } from "../../lib/searchMode";
 import { describeExclusions, type RouteExclusions } from "../../lib/routeOptions";
 import { applyFilters, bestStationId, DEFAULT_SORT, fuelModeLabel, referenceLevelText, type SortMode } from "../../lib/stationView";
 import { CheckIcon, InfoIcon, RouteIcon, SavingsIcon, SlidersIcon, SpinnerIcon } from "../icons";
@@ -19,12 +20,21 @@ import { TelemetryCapsule } from "./TelemetryCapsule";
 
 type SuccessState = Extract<SearchState, { status: "success" }>;
 
+/** Nessun tracciato da disegnare («Intorno a me»): un riferimento fisso, così la mappa non si ridisegna a ogni rendering. */
+const EMPTY_GEOMETRY: ReadonlyArray<[number, number]> = [];
+
 /** Schede mostrate subito: l'elenco completo resta a un tap ("Mostra altre"), la mappa e i filtri lavorano sempre su tutte. */
 export const INITIAL_CARDS = 20;
 
 const SORTS: ReadonlyArray<{ mode: SortMode; label: string; title: string; Icon: typeof SavingsIcon }> = [
   { mode: "savings", label: "Più conveniente", title: "Risparmio netto maggiore per prime", Icon: SavingsIcon },
   { mode: "detour", label: "Minor deviazione", title: "Meno chilometri extra per prime (a pari km, la più vicina alla strada)", Icon: RouteIcon },
+];
+
+/** «Intorno a me»: non c'è un percorso da cui deviare, quindi il secondo ordinamento è per strada da fare. */
+const NEARBY_SORTS: typeof SORTS = [
+  SORTS[0]!,
+  { mode: "detour", label: "Più vicina", title: "Meno strada per prime (giro andata e ritorno)", Icon: RouteIcon },
 ];
 
 function Chip({
@@ -61,17 +71,32 @@ function Chip({
   );
 }
 
-function RefinementNotice({ refinement }: { refinement: RefinementInfo }) {
+function RefinementNotice({ refinement, nearby = false }: { refinement: RefinementInfo; nearby?: boolean }) {
   if (refinement.status === "done") return null;
   const pending = refinement.status === "pending";
+  const what = nearby ? "distanze" : "deviazioni";
   return (
     <p role="status" className="flex items-center gap-space-sm text-body-sm font-body-sm text-on-surface-variant">
       {pending ? <SpinnerIcon className="w-4 h-4 text-secondary" /> : <InfoIcon className="w-4 h-4 text-outline" />}
       {pending
-        ? "Calcolo le deviazioni reali delle migliori stazioni…"
+        ? `Calcolo le ${what} reali delle migliori stazioni…`
         : refinement.status === "skipped"
-          ? "Deviazioni stimate (il calcolo sul percorso reale è sospeso)."
-          : "Calcolo non riuscito: le deviazioni sono stime approssimate."}
+          ? `${nearby ? "Distanze stimate" : "Deviazioni stimate"} (il calcolo sul percorso reale è sospeso).`
+          : `Calcolo non riuscito: ${nearby ? "le distanze sono stime approssimate" : "le deviazioni sono stime approssimate"}.`}
+    </p>
+  );
+}
+
+/**
+ * «Intorno a me»: se nessuna stazione in elenco fa risparmiare rispetto al prezzo medio della zona (il giro costa più dello
+ * sconto) lo si dice, invece di lasciare una classifica tutta «Non conviene». L'elenco resta sotto, ordinato come sempre.
+ */
+function NoSavingsNotice({ results }: { results: readonly StationResult[] }) {
+  if (results.length === 0 || results.some((r) => r.netSavings > 0)) return null;
+  return (
+    <p data-testid="no-savings-notice" role="status" className="flex items-start gap-space-sm text-body-sm font-body-sm text-on-surface-variant">
+      <InfoIcon className="w-4 h-4 text-outline shrink-0 mt-0.5" />
+      <span>Nessuna stazione conviene rispetto al prezzo medio della zona: il tragitto costa più di quanto si risparmia. In cima all'elenco c'è comunque la migliore.</span>
     </p>
   );
 }
@@ -125,6 +150,12 @@ export function ResultsScreen({
   searching?: boolean;
 }) {
   const { response, results, refinement, request, labels } = state;
+  const nearby = isNearbyResponse(response);
+  const sorts = nearby ? NEARBY_SORTS : SORTS;
+  // Punto di partenza di «Intorno a me», stabile tra i rendering (la mappa si riadatta solo se cambia davvero).
+  const nearbyLon = nearby ? response.nearby.origin.lon : null;
+  const nearbyLat = nearby ? response.nearby.origin.lat : null;
+  const center = useMemo<readonly [number, number] | null>(() => (nearbyLon !== null && nearbyLat !== null ? [nearbyLon, nearbyLat] : null), [nearbyLon, nearbyLat]);
 
   const [sort, setSort] = useState<SortMode>(DEFAULT_SORT);
   // Se la ricerca era già limitata ai soli Self non c'è nulla da aggiungere lato client: la pill resta attiva e bloccata.
@@ -239,7 +270,9 @@ export function ResultsScreen({
         className="relative isolate w-full bg-surface-container-high overflow-hidden shadow-md h-[var(--map-h,40vh)] min-h-[140px] transition-[height] duration-200 ease-out motion-reduce:transition-none md:absolute md:inset-0 md:h-auto md:transition-none"
       >
         <MapView
-          geometry={response.route.geometry}
+          geometry={nearby ? EMPTY_GEOMETRY : response.route.geometry}
+          center={center}
+          radiusKm={nearby ? response.nearby.radiusKm : undefined}
           stations={mapStations}
           selectedId={selectedId}
           stopRoute={stopRoute}
@@ -249,9 +282,10 @@ export function ResultsScreen({
         <TelemetryCapsule
           origin={labels.origin}
           destination={labels.destination}
-          distanceKm={response.route.distanceKm}
-          durationMinutes={response.route.durationMinutes}
+          distanceKm={nearby ? 0 : response.route.distanceKm}
+          durationMinutes={nearby ? 0 : response.route.durationMinutes}
           stationCount={visible.length}
+          radiusKm={nearby ? response.nearby.radiusKm : undefined}
         />
       </div>
 
@@ -259,7 +293,7 @@ export function ResultsScreen({
           ripiego in CSS = punto chiuso). Dietro la barra inferiore: il fondo (banner dei prezzi) tiene lo spazio della barra. */}
       <section
         ref={sheetRef}
-        aria-label="Stazioni lungo il percorso"
+        aria-label={nearby ? "Stazioni intorno a te" : "Stazioni lungo il percorso"}
         data-testid="bottom-sheet"
         data-snap={sheet.snap}
         data-dragging={sheet.dragging}
@@ -291,7 +325,7 @@ export function ResultsScreen({
         <div data-testid="sheet-scroll" className={`flex-1 min-h-0 overflow-y-auto no-scrollbar px-gutter pb-space-lg flex flex-col gap-space-md ${hiddenContent}`}>
           <div className="flex flex-col gap-space-sm pt-space-xs md:pt-space-lg">
             <div role="group" aria-label="Ordina per" className="flex items-center gap-space-sm overflow-x-auto no-scrollbar py-0.5">
-              {SORTS.map(({ mode, label, title, Icon }) => (
+              {sorts.map(({ mode, label, title, Icon }) => (
                 <Chip key={mode} active={sort === mode} title={title} onClick={() => setSort(mode)}>
                   <Icon className="w-4 h-4" />
                   {label}
@@ -338,7 +372,7 @@ export function ResultsScreen({
                 Opzioni percorso{exclusionsText ? ` · ${exclusionsText}` : ""}
               </button>
             </div>
-            <RefinementNotice refinement={refinement} />
+            <RefinementNotice refinement={refinement} nearby={nearby} />
             <StaleStationsNotice info={response.staleStations} onOpenSettings={onOpenFreshnessSettings} />
             {searching && (
               <p role="status" className="flex items-center gap-space-sm text-body-sm font-body-sm text-on-surface-variant">
@@ -347,18 +381,21 @@ export function ResultsScreen({
               </p>
             )}
             <p data-testid="reference-price" className="text-body-sm font-body-sm text-on-surface-variant tabular-nums">
-              Prezzo di riferimento €{formatPrice(response.referencePrice.value)}/L ({referenceLevelText(response.referencePrice.level, response.referencePrice.sampleSize)})
+              Prezzo di riferimento €{formatPrice(response.referencePrice.value)}/L ({referenceLevelText(response.referencePrice.level, response.referencePrice.sampleSize, nearby)})
             </p>
+            {nearby && <NoSavingsNotice results={visible} />}
           </div>
 
           {visible.length === 0 ? (
             <div role="status" className="rounded-lg bg-surface-container-low p-space-xl text-center flex flex-col items-center gap-space-md">
               <p className="text-headline-sm font-headline-sm text-on-surface">
-                {results.length === 0 ? "Nessuna stazione conveniente sul percorso" : "Nessuna stazione con questi filtri"}
+                {results.length === 0 ? (nearby ? "Nessuna stazione nel raggio di ricerca" : "Nessuna stazione conveniente sul percorso") : "Nessuna stazione con questi filtri"}
               </p>
               <p className="text-body-sm font-body-sm text-on-surface-variant">
                 {results.length === 0
-                  ? "Prova ad aumentare la deviazione massima, a cambiare carburante o a disattivare «Solo Self» nella ricerca."
+                  ? nearby
+                    ? "Prova ad aumentare il raggio di ricerca, a cambiare carburante o a disattivare «Solo Self» nella ricerca."
+                    : "Prova ad aumentare la deviazione massima, a cambiare carburante o a disattivare «Solo Self» nella ricerca."
                   : "Cambia i filtri per vedere le altre stazioni."}
               </p>
               {results.length > 0 && hasFilters && (
@@ -379,6 +416,7 @@ export function ResultsScreen({
                   onSelect={selectFromCard}
                   onInfo={onOpenStation}
                   onNavigate={navigate}
+                  nearby={nearby}
                 />
               ))}
             </ol>

@@ -4,10 +4,13 @@ import { GasStationIcon, NavigateIcon } from "../icons";
 
 interface TelemetryCapsuleProps {
   origin: string;
+  /** Vuota in «Intorno a me»: lì la capsula mostra il luogo e il raggio al posto di tratta, distanza e durata. */
   destination: string;
   distanceKm: number;
   durationMinutes: number;
   stationCount: number;
+  /** «Intorno a me»: raggio di ricerca in km. */
+  radiusKm?: number;
 }
 
 /**
@@ -15,7 +18,30 @@ interface TelemetryCapsuleProps {
  * l'elenco è un pannello a sinistra (440 px + margine): la capsula sta in alto a destra, nella parte di mappa che resta
  * scoperta, larga quanto il suo contenuto e mai oltre lo spazio libero.
  */
-export function TelemetryCapsule({ origin, destination, distanceKm, durationMinutes, stationCount }: TelemetryCapsuleProps) {
+export function TelemetryCapsule({ origin, destination, distanceKm, durationMinutes, stationCount, radiusKm }: TelemetryCapsuleProps) {
+  if (radiusKm !== undefined) {
+    return (
+      <div
+        data-testid="nearby-capsule"
+        className="absolute top-space-md inset-x-space-md md:inset-x-auto md:right-space-md md:max-w-[calc(100%-440px-3rem)] z-10 flex items-center justify-between gap-space-xs bg-surface-container-lowest/90 backdrop-blur-md pl-space-md pr-space-sm py-space-xs rounded-full shadow-md"
+      >
+        <div className="flex items-center gap-1 min-w-0">
+          <NavigateIcon className="w-[18px] h-[18px] text-secondary shrink-0" />
+          <span title={origin} className="truncate min-w-0 text-headline-sm font-headline-sm text-[12px] text-on-surface">
+            Intorno a {shortPlaceName(origin) || "te"}
+          </span>
+          <span aria-hidden="true" className="text-on-surface-variant text-body-sm shrink-0">
+            •
+          </span>
+          <span className="text-label-md font-label-md text-on-surface-variant tabular-nums shrink-0">entro {radiusKm} km</span>
+        </div>
+        <div className="flex items-center gap-1 bg-surface-container-high px-2 py-0.5 rounded-full shrink-0">
+          <GasStationIcon className="w-[13px] h-[13px] text-primary" />
+          <span className="text-label-sm font-label-sm text-on-primary-fixed-variant tabular-nums">{stationCount} staz.</span>
+        </div>
+      </div>
+    );
+  }
   return (
     <div className="absolute top-space-md inset-x-space-md md:inset-x-auto md:right-space-md md:max-w-[calc(100%-440px-3rem)] z-10 flex items-center justify-between gap-space-xs bg-surface-container-lowest/90 backdrop-blur-md pl-space-md pr-space-sm py-space-xs rounded-full md:max-lg:rounded-2xl shadow-md">
       {/* Tra 768 e 1023 px lo spazio a destra del pannello è stretto: la tratta sta su una riga e i dati sotto. */}

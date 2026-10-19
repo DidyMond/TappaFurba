@@ -542,3 +542,59 @@ describe("StationDetailScreen — design system", () => {
     expect([...small].filter((el) => weak.some((cls) => el.classList.contains(cls)))).toEqual([]);
   });
 });
+
+describe("StationDetailScreen — «Intorno a me»", () => {
+  const nearbyDetail = (overrides: Parameters<typeof makeDetail>[0] = {}) =>
+    makeDetail({
+      mode: "nearby",
+      referencePrice: { value: 2.139, level: "area", sampleSize: 12 },
+      detour: { km: 6.2, minutes: 11.4, source: "routing" },
+      lateralDistanceKm: 2.7,
+      alongRouteKm: 0,
+      ...overrides,
+    });
+
+  it("l'impatto parla del rifornimento: giro andata e ritorno (senza «+»), costo del giro e riferimento della zona", async () => {
+    respondWith(nearbyDetail());
+    renderScreen();
+    await loaded();
+
+    const bento = screen.getByRole("region", { name: "Impatto del rifornimento" });
+    expect(screen.queryByRole("region", { name: "Impatto sul tuo viaggio" })).not.toBeInTheDocument();
+    const tile = within(bento).getByTestId("tile-detour");
+    expect(tile).toHaveTextContent("Andata e ritorno");
+    expect(tile).toHaveTextContent("6,2 km");
+    expect(tile).toHaveTextContent("11 min guida");
+    expect(tile).not.toHaveTextContent("+");
+    expect(tile).not.toHaveTextContent("Deviazione");
+    expect(bento).toHaveTextContent("Riferimento €2,139/L (prezzo tipico di 12 stazioni nel raggio di ricerca)");
+    expect(bento).toHaveTextContent("costo del giro");
+    expect(bento).not.toHaveTextContent("costo della deviazione");
+  });
+
+  it("in fondo dice la distanza in linea d'aria da te, non la posizione sul percorso", async () => {
+    respondWith(nearbyDetail());
+    renderScreen();
+    await loaded();
+    expect(screen.getByText("A 2,7 km in linea d'aria da te.")).toBeInTheDocument();
+    expect(screen.queryByText(/dalla partenza/)).not.toBeInTheDocument();
+  });
+
+  it("una stima (routing non disponibile) resta segnalata con la tilde, anche senza il «+»", async () => {
+    respondWith(nearbyDetail({ detour: { km: 6.2, minutes: 11.4, source: "proxy" } }));
+    renderScreen();
+    await loaded();
+    const tile = screen.getByTestId("tile-detour");
+    expect(tile).toHaveTextContent("~6,2 km");
+    expect(within(tile).getByTestId("detour-source")).toHaveTextContent("Stima approssimata");
+  });
+
+  it("«In viaggio» non cambia: «Impatto sul tuo viaggio», «+» davanti alla deviazione e posizione sul percorso", async () => {
+    respondWith(makeDetail({ alongRouteKm: 12.3, lateralDistanceKm: 0.8 }));
+    renderScreen();
+    await loaded();
+    expect(screen.getByRole("region", { name: "Impatto sul tuo viaggio" })).toBeInTheDocument();
+    expect(screen.getByTestId("tile-detour")).toHaveTextContent("+1,6 km");
+    expect(screen.getByText("A 12,3 km dalla partenza, a 0,8 km dal percorso diretto.")).toBeInTheDocument();
+  });
+});
