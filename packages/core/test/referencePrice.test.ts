@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  computeAreaReferencePrice,
   computeReferencePrice,
   median,
   N_MIN,
@@ -132,5 +133,22 @@ describe("computeReferencePrice — livello 3 (nazionale)", () => {
   it("restituisce null quando nessun livello ha dati sufficienti", () => {
     expect(computeReferencePrice([sample(0.1, 1.7)], null)).toBeNull();
     expect(computeReferencePrice([], null)).toBeNull();
+  });
+});
+
+describe("computeAreaReferencePrice — modalità «Intorno a me»", () => {
+  it("usa la mediana di tutte le stazioni nel raggio (livello «area»), senza il livello «sul percorso»", () => {
+    // Tre stazioni a meno di 500 m (1,60) e tre più lontane (2,00): con il livello «sul percorso» vincerebbe 1,60.
+    const samples = [sample(0.1, 1.6), sample(0.2, 1.6), sample(0.3, 1.6), sample(3, 2.0), sample(3.5, 2.0), sample(4, 2.0)];
+    expect(computeAreaReferencePrice(samples, national)).toEqual({ value: 1.8, level: "area", sampleSize: 6 });
+  });
+
+  it("con meno di N_MIN stazioni nel raggio ripiega sul prezzo nazionale", () => {
+    expect(computeAreaReferencePrice([sample(1, 1.7), sample(2, 1.9)], national)).toEqual({ value: 1.81, level: "national", sampleSize: 30000 });
+  });
+
+  it("restituisce null se mancano sia le stazioni in zona sia il dato nazionale", () => {
+    expect(computeAreaReferencePrice([], null)).toBeNull();
+    expect(computeAreaReferencePrice([], { median: 1.8, sampleSize: 2 })).toBeNull();
   });
 });

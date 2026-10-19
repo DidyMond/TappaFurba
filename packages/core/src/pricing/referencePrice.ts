@@ -18,7 +18,7 @@ export const N_MIN = 3;
 /** Soglia "sul percorso", one-way, fissa e indipendente dallo slider dell'utente. */
 export const ON_ROUTE_THRESHOLD_KM = 0.5;
 
-export type ReferencePriceLevel = "on_route" | "corridor" | "national";
+export type ReferencePriceLevel = "on_route" | "corridor" | "national" | "area";
 
 export interface PriceSample {
   /** Distanza laterale one-way della stazione dal tracciato, km. */
@@ -68,6 +68,30 @@ export function computeReferencePrice(
       level: "corridor",
       sampleSize: corridorSamples.length,
     };
+  }
+
+  if (national && national.sampleSize >= N_MIN && Number.isFinite(national.median)) {
+    return { value: national.median, level: "national", sampleSize: national.sampleSize };
+  }
+
+  return null;
+}
+
+/**
+ * Prezzo di riferimento della modalità «Intorno a me» (nessun tracciato): cascata a 2 livelli.
+ *
+ *   1. area     : mediana di tutte le stazioni entro il raggio di ricerca
+ *   2. national : se nel raggio ci sono < N_MIN stazioni, mediana nazionale
+ *
+ * Manca il livello «sul percorso» (stazioni entro 500 m): con un punto di partenza sarebbe la mediana di ciò che sta
+ * davanti a casa, troppo locale per dire cosa costa «in zona».
+ */
+export function computeAreaReferencePrice(
+  areaSamples: readonly Pick<PriceSample, "price">[],
+  national: NationalPrice | null,
+): ReferencePrice | null {
+  if (areaSamples.length >= N_MIN) {
+    return { value: median(areaSamples.map((s) => s.price)), level: "area", sampleSize: areaSamples.length };
   }
 
   if (national && national.sampleSize >= N_MIN && Number.isFinite(national.median)) {

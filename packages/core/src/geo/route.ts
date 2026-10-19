@@ -52,6 +52,23 @@ export function routeToWkt(coords: readonly Coordinate[]): string {
   return `LINESTRING(${coords.map(([lon, lat]) => `${lon.toFixed(6)} ${lat.toFixed(6)}`).join(", ")})`;
 }
 
+/** WKT POINT (lon lat), 6 decimali, per le query PostGIS attorno a un punto (modalità «Intorno a me»). */
+export function pointToWkt([lon, lat]: Coordinate): string {
+  return `POINT(${lon.toFixed(6)} ${lat.toFixed(6)})`;
+}
+
+/** Raggio medio terrestre usato da turf (6371008,8 m): le distanze coincidono con quelle del resto del calcolo. */
+const EARTH_RADIUS_KM = 6371.0088;
+
+/** Distanza in linea d'aria tra due punti (haversine), km. */
+export function distanceKm(a: Coordinate, b: Coordinate): number {
+  const toRad = (deg: number) => (deg * Math.PI) / 180;
+  const dLat = toRad(b[1] - a[1]);
+  const dLon = toRad(b[0] - a[0]);
+  const h = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(a[1])) * Math.cos(toRad(b[1])) * Math.sin(dLon / 2) ** 2;
+  return 2 * EARTH_RADIUS_KM * Math.asin(Math.min(1, Math.sqrt(h)));
+}
+
 export interface RouteProjection {
   /** Distanza one-way minima del punto dal tracciato, km. */
   lateralDistanceKm: number;
