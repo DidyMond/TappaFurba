@@ -1,6 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { AppError } from "../errors";
-import { searchIdParamsSchema, searchRequestSchema, stationRouteParamsSchema } from "../search/schemas";
+import { nearbyRequestSchema, searchIdParamsSchema, searchRequestSchema, stationRouteParamsSchema } from "../search/schemas";
 import type { SearchService } from "../search/SearchService";
 
 export interface SearchRouteOptions {
@@ -20,6 +20,18 @@ export function registerSearchRoutes(app: FastifyInstance, options: SearchRouteO
     async (request, reply) => {
       const body = searchRequestSchema.parse(request.body);
       const response = await options.service.search(body);
+      reply.code(200).send(response);
+    },
+  );
+
+  // «Intorno a me»: stessa sessione, stesso ricalcolo e stessi tetti di spesa di /search (ogni ricerca può costare fino a 15
+  // chiamate Directions per verificare il giro delle prime stazioni), quindi lo stesso limite per minuto.
+  app.post(
+    "/nearby",
+    { config: { rateLimit: { max: options.searchRateLimitPerMinute, timeWindow: "1 minute" } } },
+    async (request, reply) => {
+      const body = nearbyRequestSchema.parse(request.body);
+      const response = await options.service.searchNearby(body);
       reply.code(200).send(response);
     },
   );

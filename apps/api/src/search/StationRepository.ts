@@ -20,9 +20,9 @@ export interface CorridorPriceRow {
 }
 
 export interface CorridorQuery {
-  /** Tracciato (semplificato) in WKT, coordinate lon lat. */
+  /** Tracciato (semplificato, LINESTRING) o punto di partenza («Intorno a me», POINT) in WKT, coordinate lon lat. */
   routeWkt: string;
-  /** Raggio one-way del corridoio attorno al tracciato. */
+  /** Raggio one-way del corridoio attorno al tracciato (o del cerchio attorno al punto). */
   radiusMeters: number;
   fuelType: SearchFuelType;
   /**

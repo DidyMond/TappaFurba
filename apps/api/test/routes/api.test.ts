@@ -427,3 +427,115 @@ describe("GET /search/:id/stations/:stationId/route", () => {
     expect(response.json().error.code).toBe("VALIDATION_ERROR");
   });
 });
+
+describe("POST /nearby — «Intorno a me»", () => {
+  const nearbyBody = { origin: { lon: 9.0, lat: 45.0 }, fuelType: "benzina" };
+  const nearbyStations = () => [
+    row({ stationId: 21, lon: 9.0, lat: 45.01, price: 1.8 }),
+    row({ stationId: 22, lon: 9.0, lat: 45.02, price: 1.82 }),
+    row({ stationId: 23, lon: 9.0, lat: 45.03, price: 1.84 }),
+    row({ stationId: 24, lon: 9.0, lat: 45.035, price: 1.7 }),
+  ];
+
+  async function makeNearbyApp(overrides: Partial<AppOptions> = {}): Promise<FastifyInstance> {
+    const searchService = new SearchService({
+      routing: new MockRoutingProvider(),
+      repository: new InMemoryStationRepository(nearbyStations()),
+      budget: { status: async () => "ok" },
+      sessions: new SearchSessionStore(),
+    });
+    return makeApp({ searchService, ...overrides });
+  }
+
+  it("200 con risultati, riferimento «area», punto e raggio di default (5 km), senza percorso", async () => {
+    const app = await makeNearbyApp();
+    const response = await app.inject({ method: "POST", url: "/nearby", payload: nearbyBody });
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json();
+    expect(body.searchId).toMatch(/^[0-9a-f-]{36}$/);
+    expect(body.nearby).toEqual({ origin: { lon: 9.0, lat: 45.0 }, radiusKm: 5 });
+    expect(body.route).toBeUndefined();
+    expect(body.referencePrice).toMatchObject({ level: "area", sampleSize: 4 });
+    expect(body.results).toHaveLength(4);
+    expect(body.refinement.status).toBe("pending");
+  });
+
+  it("accetta un raggio scelto dall'utente", async () => {
+    const app = await makeNearbyApp();
+    const body = (await app.inject({ method: "POST", url: "/nearby", payload: { ...nearbyBody, radiusKm: 3.5 } })).json();
+    expect(body.nearby.radiusKm).toBe(3.5);
+    expect(body.candidatesEvaluated).toBe(3); // solo le stazioni entro 3,5 km (la quarta è a ~3,9)
+  });
+
+  it.each([
+    ["origine mancante", { ...nearbyBody, origin: undefined }],
+    ["raggio oltre il massimo (10 km)", { ...nearbyBody, radiusKm: 11 }],
+    ["raggio sotto il minimo (1 km)", { ...nearbyBody, radiusKm: 0.5 }],
+    ["carburante non ammesso (hvo)", { ...nearbyBody, fuelType: "hvo" }],
+    ["latitudine fuori range", { ...nearbyBody, origin: { lon: 9, lat: 95 } }],
+    ["litri negativi", { ...nearbyBody, liters: -5 }],
+    ["tipo sbagliato", { ...nearbyBody, radiusKm: "cinque" }],
+  ])("400 VALIDATION_ERROR — %s", async (_label, payload) => {
+    const app = await makeNearbyApp();
+    const response = await app.inject({ method: "POST", url: "/nearby", payload: payload as object });
+    expect(response.statusCode).toBe(400);
+    expect(response.json().error.code).toBe("VALIDATION_ERROR");
+  });
+
+  it("422 NO_PRICE_DATA quando in zona non ci sono prezzi sufficienti", async () => {
+    const searchService = new SearchService({
+      routing: new MockRoutingProvider(),
+      repository: new InMemoryStationRepository([]),
+      budget: { status: async () => "ok" },
+      sessions: new SearchSessionStore(),
+    });
+    const app = await makeApp({ searchService });
+    const response = await app.inject({ method: "POST", url: "/nearby", payload: nearbyBody });
+    expect(response.statusCode).toBe(422);
+    expect(response.json().error.code).toBe("NO_PRICE_DATA");
+  });
+
+  it("RATE LIMIT — stesso limite per minuto di /search, con un contatore proprio", async () => {
+    const app = await makeNearbyApp({ searchRateLimitPerMinute: 2 });
+    const statuses: number[] = [];
+    for (let i = 0; i < 4; i++) {
+      statuses.push((await app.inject({ method: "POST", url: "/nearby", payload: nearbyBody })).statusCode);
+    }
+    expect(statuses).toEqual([200, 200, 429, 429]);
+    expect((await app.inject({ method: "POST", url: "/nearby", payload: nearbyBody })).json().error.code).toBe("RATE_LIMITED");
+  });
+
+  it("il polling e il dettaglio della stazione funzionano con l'id di una ricerca «Intorno a me»", async () => {
+    const app = await makeNearbyApp();
+    const { searchId } = (await app.inject({ method: "POST", url: "/nearby", payload: nearbyBody })).json();
+
+    const poll = await app.inject({ method: "GET", url: `/search/${searchId}` });
+    expect(poll.statusCode).toBe(200);
+    expect(poll.json().results.length).toBe(4);
+
+    const detail = await app.inject({ method: "GET", url: `/search/${searchId}/stations/24` });
+    expect(detail.statusCode).toBe(200);
+    expect(detail.json()).toMatchObject({ mode: "nearby", alongRouteKm: 0 });
+
+    const route = await app.inject({ method: "GET", url: `/search/${searchId}/stations/24/route` });
+    expect(route.statusCode).toBe(200);
+    expect(route.json().geometry.length).toBeGreaterThan(1);
+  });
+
+  it("i log non contengono le coordinate del punto di partenza", async () => {
+    const lines: string[] = [];
+    const logStream = new Writable({
+      write(chunk, _encoding, callback) {
+        lines.push(chunk.toString());
+        callback();
+      },
+    });
+    const app = await makeNearbyApp({ logger: true, logStream });
+    await app.inject({ method: "POST", url: "/nearby", payload: { ...nearbyBody, origin: { lon: 9.123456, lat: 45.654321 } } });
+    await app.close();
+    const logs = lines.join("");
+    expect(logs).not.toContain("9.123456");
+    expect(logs).not.toContain("45.654321");
+  });
+});

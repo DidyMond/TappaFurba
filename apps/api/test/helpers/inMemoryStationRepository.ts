@@ -1,14 +1,25 @@
-import { createRouteProjector, isPriceFresh, tileForPoint, type Coordinate, type NationalPrice } from "@tappafurba/core";
+import { createRouteProjector, distanceKm, isPriceFresh, tileForPoint, type Coordinate, type NationalPrice } from "@tappafurba/core";
 import type { StationPriceEntry } from "@tappafurba/shared";
 import type { CorridorPriceRow, CorridorQuery, StaleStation, StationRepository } from "../../src/search/StationRepository";
 
-/** Estrae le coordinate da un WKT `LINESTRING(lon lat, ...)` generato da routeToWkt. */
+/** Estrae le coordinate da un WKT `LINESTRING(lon lat, ...)` o `POINT(lon lat)` generato da routeToWkt/pointToWkt. */
 function parseWkt(wkt: string): Coordinate[] {
   const inner = wkt.slice(wkt.indexOf("(") + 1, wkt.lastIndexOf(")"));
   return inner.split(",").map((pair) => {
     const [lon, lat] = pair.trim().split(/\s+/).map(Number);
     return [lon!, lat!] as Coordinate;
   });
+}
+
+/** Distanza dal tracciato (LINESTRING) o dal punto (POINT) di un WKT, come la calcolerebbe `ST_DWithin`. */
+function distanceFromWkt(wkt: string): (target: Coordinate) => number {
+  const coords = parseWkt(wkt);
+  if (coords.length === 1) {
+    const center = coords[0]!;
+    return (target) => distanceKm(center, target);
+  }
+  const project = createRouteProjector(coords);
+  return (target) => project(target).lateralDistanceKm;
 }
 
 /**
@@ -47,8 +58,8 @@ export class InMemoryStationRepository implements StationRepository {
 
   async findStaleStations(query: CorridorQuery & { onlySelf: boolean }): Promise<StaleStation[]> {
     this.lastStaleQuery = query;
-    const project = createRouteProjector(parseWkt(query.routeWkt));
-    const near = (s: { lon: number; lat: number }) => project([s.lon, s.lat]).lateralDistanceKm * 1000 <= query.radiusMeters;
+    const distance = distanceFromWkt(query.routeWkt);
+    const near = (s: { lon: number; lat: number }) => distance([s.lon, s.lat]) * 1000 <= query.radiusMeters;
     if (!this.freshness) return this.staleStations.filter(near);
     // Stazioni del corridoio con almeno un prezzo (Self, se «solo Self») e nessuno fresco.
     const byStation = new Map<number, CorridorPriceRow[]>();
@@ -68,10 +79,8 @@ export class InMemoryStationRepository implements StationRepository {
 
   async findCorridorPrices(query: CorridorQuery): Promise<CorridorPriceRow[]> {
     this.lastQuery = query;
-    const project = createRouteProjector(parseWkt(query.routeWkt));
-    return this.rows.filter(
-      (row) => project([row.lon, row.lat]).lateralDistanceKm * 1000 <= query.radiusMeters && this.isFresh(row, query.maxAgeHours),
-    );
+    const distance = distanceFromWkt(query.routeWkt);
+    return this.rows.filter((row) => distance([row.lon, row.lat]) * 1000 <= query.radiusMeters && this.isFresh(row, query.maxAgeHours));
   }
 
   async getNationalPrice(): Promise<NationalPrice | null> {
