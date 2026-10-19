@@ -1013,3 +1013,20 @@ describe("ResultsScreen — «Intorno a me»", () => {
     expect(screen.getByText("Distanze stimate (il calcolo sul percorso reale è sospeso).")).toBeInTheDocument();
   });
 });
+
+describe("ResultsScreen — «Intorno a me»: l'etichetta «a X km» usa lo stesso valore del ranking", () => {
+  it("la distanza mostrata è metà del giro usato nel calcolo (detourKm / 2), non la linea d'aria (lateralDistanceKm)", () => {
+    // Giro stimato 7,5 km (= 2 × 3 km × 1,25) ma linea d'aria 3 km: l'etichetta deve dire ~3,8 km, coerente con il costo del giro.
+    const results = [makeResult({ station: { id: 1 }, lateralDistanceKm: 3, detourKm: 7.5, detourMinutes: 11, detourSource: "proxy", netSavings: 2 })];
+    const response = makeNearbyResponse({ results });
+    render(
+      <ResultsScreen
+        state={makeState({ response, results, request: NEARBY_REQUEST, labels: { origin: "Via Roma 1, 20100 Milano, Italia", destination: "" } })}
+      />,
+    );
+    const card = screen.getByTestId("station-card");
+    expect(card).toHaveTextContent("a ~3,8 km");
+    expect(card).not.toHaveTextContent("a ~3,0 km");
+    expect(card).toHaveTextContent("Andata e ritorno ~7,5 km");
+  });
+});

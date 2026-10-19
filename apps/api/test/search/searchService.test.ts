@@ -1,4 +1,4 @@
-import { tileForPoint } from "@tappafurba/core";
+import { PROXY_CIRCUITY_FACTOR, tileForPoint } from "@tappafurba/core";
 import type { NearbyRequest, SearchRequest, StationPriceEntry } from "@tappafurba/shared";
 import { describe, expect, it } from "vitest";
 import { AppError, BudgetExhaustedError, ProviderError } from "../../src/errors";
@@ -1402,5 +1402,60 @@ describe("SearchService — inversione di marcia alla stazione", () => {
     const mock = routing as MockRoutingProvider;
     expect(mock.calls.length).toBeGreaterThan(0);
     expect(mock.callOptions.some((o) => o.continueStraight !== undefined)).toBe(false);
+  });
+});
+
+/**
+ * Il proxy del giro di «Intorno a me» è un fattore unico fisso (2 × distanza × PROXY_CIRCUITY_FACTOR): non deriva da nessun
+ * percorso, quindi non può ereditarne la tortuosità. Questi test fissano le garanzie chieste dalla revisione indipendente.
+ */
+describe("SearchService.searchNearby — il proxy del giro è un fattore unico, indipendente da qualsiasi percorso", () => {
+  const nearbyRequest: NearbyRequest = {
+    origin: ORIGIN,
+    radiusKm: 5,
+    fuelType: "benzina",
+    liters: 45,
+    consumptionKmPerLiter: 15,
+    valueOfTimePerMinute: 0.15,
+    onlySelf: true,
+    maxPriceAgeHours: 72,
+    avoidMotorway: false,
+    avoidTolls: false,
+    avoidFerries: false,
+  };
+  // Stazioni a ~1,1 / ~2,2 / ~3,3 km e una al limite del raggio (~4,99 km).
+  const stations = () => [
+    row({ stationId: 41, lon: 9.0, lat: 45.01, price: 1.8 }),
+    row({ stationId: 42, lon: 9.0, lat: 45.02, price: 1.82 }),
+    row({ stationId: 43, lon: 9.0, lat: 45.03, price: 1.84 }),
+    row({ stationId: 44, lon: 9.0, lat: 45.0449, price: 1.7 }),
+  ];
+  const proxyOnly = (routing: MockRoutingProvider) => buildService(stations(), { routing, budget: "hard_limit" }).service.searchNearby(nearbyRequest);
+
+  it("al limite del raggio (5 km) il giro stimato è ~12,5 km: 2 × distanza × 1,25, non il ~13,5 che darebbe un fattore 1,35", async () => {
+    const { results } = await proxyOnly(new MockRoutingProvider());
+    const edge = results.find((r) => r.station.id === 44)!;
+    expect(edge.detourSource).toBe("proxy");
+    expect(edge.lateralDistanceKm).toBeCloseTo(4.99, 2);
+    expect(edge.detourKm).toBeCloseTo(2 * edge.lateralDistanceKm * PROXY_CIRCUITY_FACTOR, 1); // la risposta arrotonda a 2 decimali
+    expect(edge.detourKm).toBeLessThanOrEqual(2 * 5 * PROXY_CIRCUITY_FACTOR + 0.01);
+    expect(edge.detourKm).toBeLessThan(13);
+  });
+
+  it("ogni stazione ha lo stesso rapporto giro / (2 × linea d'aria), quale che sia la tortuosità del provider di percorsi", async () => {
+    for (const circuity of [1.0, 1.2, 1.35, 3.0]) {
+      const { results } = await proxyOnly(new MockRoutingProvider({ circuity }));
+      for (const r of results) expect(Math.abs(r.detourKm / (2 * r.lateralDistanceKm) - PROXY_CIRCUITY_FACTOR)).toBeLessThan(0.01);
+    }
+  });
+
+  it("la classifica stimata non cambia con il provider di percorsi (nessuna distorsione ereditata)", async () => {
+    const ranking = async (circuity: number) => (await proxyOnly(new MockRoutingProvider({ circuity }))).results.map((r) => [r.station.id, r.netSavings]);
+    expect(await ranking(1.0)).toEqual(await ranking(3.0));
+  });
+
+  it("la distanza «a X km da te» della scheda (metà del giro) è coerente col proxy: lateral × 1,25, non la sola linea d'aria", async () => {
+    const { results } = await proxyOnly(new MockRoutingProvider());
+    for (const r of results) expect(r.detourKm / 2).toBeCloseTo(r.lateralDistanceKm * PROXY_CIRCUITY_FACTOR, 1);
   });
 });
