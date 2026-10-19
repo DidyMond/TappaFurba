@@ -159,3 +159,29 @@ describe("MapboxRoutingProvider — «Evita autostrada»", () => {
     for (const call of fetchImpl.mock.calls) expect(new URL(call[0] as string).searchParams.has("exclude")).toBe(false);
   });
 });
+
+describe("MapboxRoutingProvider — inversione di marcia ai waypoint intermedi", () => {
+  const param = async (options?: Parameters<MapboxRoutingProvider["getRoute"]>[1]) => {
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(okBody));
+    await new MapboxRoutingProvider({ token: TOKEN, fetchImpl }).getRoute([A, S, A], options);
+    return new URL(fetchImpl.mock.calls[0]![0] as string).searchParams.get("continue_straight");
+  };
+
+  it("continueStraight: false → continue_straight=false (la stazione non obbliga a girare attorno a un isolato)", async () => {
+    expect(await param({ continueStraight: false })).toBe("false");
+  });
+
+  it("assente o true: nessun parametro, resta il comportamento predefinito di Directions", async () => {
+    expect(await param()).toBeNull();
+    expect(await param({})).toBeNull();
+    expect(await param({ continueStraight: true })).toBeNull();
+  });
+
+  it("si combina con le esclusioni", async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(okBody));
+    await new MapboxRoutingProvider({ token: TOKEN, fetchImpl }).getRoute([A, S, A], { avoidTolls: true, continueStraight: false });
+    const url = new URL(fetchImpl.mock.calls[0]![0] as string);
+    expect(url.searchParams.get("exclude")).toBe("toll");
+    expect(url.searchParams.get("continue_straight")).toBe("false");
+  });
+});

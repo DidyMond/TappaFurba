@@ -39,10 +39,13 @@ export class InFlightRoutingProvider implements RoutingProvider {
 
 /**
  * Coordinate arrotondate a 4 decimali (~11 m): richieste quasi identiche condividono la chiamata in corso. Ogni insieme
- * di esclusioni (autostrada, pedaggi, traghetti) è un'altra richiesta: ha una chiave diversa.
+ * di esclusioni (autostrada, pedaggi, traghetti) e il permesso di invertire la marcia sono un'altra richiesta: hanno una chiave diversa.
  */
 function requestKey(waypoints: readonly LonLat[], options?: RouteOptions): string {
   const points = waypoints.map((point) => `${point.lon.toFixed(4)},${point.lat.toFixed(4)}`).join("|");
   const exclusions = routeExclusions(options);
-  return exclusions.length > 0 ? `${points}#exclude=${exclusions.join(",")}` : points;
+  let key = exclusions.length > 0 ? `${points}#exclude=${exclusions.join(",")}` : points;
+  // L'inversione ai waypoint intermedi cambia il percorso: è un'altra richiesta.
+  if (options?.continueStraight === false) key += "#uturn";
+  return key;
 }

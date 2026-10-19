@@ -125,7 +125,7 @@ curl -s -X POST http://localhost:3001/nearby -H 'Content-Type: application/json'
 | Suite | Test | Richiede |
 |---|---|---|
 | `packages/core` | 170 | niente |
-| `apps/api` | 305 | niente (provider di prova, repository in memoria) |
+| `apps/api` | 312 | niente (provider di prova, repository in memoria) |
 | `apps/web` | 768 | niente (la mappa WebGL è sostituita da uno stub in jsdom) |
 | `pnpm test:db` | 33 | `docker compose up -d`, `pnpm db:migrate`, `pnpm ingest` |
 | `pnpm test:e2e` | 19 | Chromium: `pnpm --filter @tappafurba/e2e exec playwright install chromium`, oppure `E2E_CHROME_CHANNEL=chrome` per usare il Chrome installato |

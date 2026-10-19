@@ -292,7 +292,7 @@ export class SearchService {
     const { request, route, origin, destination } = session;
     const via = await this.deps.routing.getRoute(
       [origin, { lon: result.station.lon, lat: result.station.lat }, destination],
-      routeOptions(request),
+      viaRouteOptions(session),
     );
     if (!via) throw new AppError("NO_ROUTE", 422, "Nessun percorso stradale trovato passando da questa stazione.");
     return { via, detour: computeRoutedDetour(route, via, result.lateralDistanceKm) };
@@ -414,7 +414,7 @@ export class SearchService {
             try {
               const via = await this.deps.routing.getRoute(
                 [origin, { lon: result.station.lon, lat: result.station.lat }, destination],
-                routeOptions(request),
+                viaRouteOptions(session),
               );
               if (!via) {
                 failures += 1;
@@ -592,6 +592,16 @@ function sortPrices(prices: readonly StationPriceEntry[]): StationPriceEntry[] {
 /** «Evita autostrada»: lo stesso tipo di percorso per il diretto e per le verifiche, così la deviazione è confrontabile. */
 function routeOptions(request: SearchOptions): RouteOptions {
   return { avoidMotorway: request.avoidMotorway, avoidTolls: request.avoidTolls, avoidFerries: request.avoidFerries };
+}
+
+/**
+ * Opzioni delle richieste «via stazione». In «Intorno a me» il giro è andata e ritorno dallo stesso punto: alla stazione si
+ * può invertire la marcia (come fa un navigatore e come mostra Google Maps); senza, Directions ci fa girare attorno a un
+ * isolato e il giro risulta più lungo di quello vero. In «In viaggio» resta il comportamento predefinito.
+ */
+function viaRouteOptions(session: SearchSession): RouteOptions {
+  const options = routeOptions(session.request);
+  return session.mode === "nearby" ? { ...options, continueStraight: false } : options;
 }
 
 function clamp(value: number, min: number, max: number): number {

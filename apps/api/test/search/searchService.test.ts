@@ -1358,3 +1358,49 @@ describe("SearchService.searchNearby — «Intorno a me»", () => {
     });
   });
 });
+
+describe("SearchService — inversione di marcia alla stazione", () => {
+  const nearbyRequest: NearbyRequest = {
+    origin: ORIGIN,
+    radiusKm: 5,
+    fuelType: "benzina",
+    liters: 45,
+    consumptionKmPerLiter: 15,
+    valueOfTimePerMinute: 0.15,
+    onlySelf: true,
+    maxPriceAgeHours: 72,
+    avoidMotorway: false,
+    avoidTolls: false,
+    avoidFerries: false,
+  };
+  const around = () => [
+    row({ stationId: 31, lon: 9.0, lat: 45.01, price: 1.8 }),
+    row({ stationId: 32, lon: 9.0, lat: 45.02, price: 1.82 }),
+    row({ stationId: 33, lon: 9.0, lat: 45.03, price: 1.84 }),
+  ];
+
+  it("«Intorno a me»: le verifiche in background, il dettaglio e il percorso della stazione ammettono l'inversione (giro andata e ritorno)", async () => {
+    const { service, routing } = buildService(around());
+    const { searchId } = await service.searchNearby(nearbyRequest);
+    await service.waitForRefinement(searchId);
+    const mock = routing as MockRoutingProvider;
+    expect(mock.calls.length).toBeGreaterThan(0);
+    expect(mock.callOptions.every((o) => o.continueStraight === false)).toBe(true);
+
+    const before = mock.calls.length;
+    await service.getStationDetail(searchId, 33); // stazione non ancora verificata o già verificata: se chiama il routing, con inversione
+    await service.getStationRoute(searchId, 31);
+    expect(mock.calls.length).toBeGreaterThan(before); // il percorso della stazione chiama sempre il routing
+    expect(mock.callOptions.every((o) => o.continueStraight === false)).toBe(true);
+  });
+
+  it("«In viaggio» non cambia: nessuna richiesta chiede l'inversione (il passaggio dalla stazione prosegue verso B)", async () => {
+    const { service, routing } = buildService();
+    const { searchId } = await service.search(request);
+    await service.waitForRefinement(searchId);
+    await service.getStationRoute(searchId, 1);
+    const mock = routing as MockRoutingProvider;
+    expect(mock.calls.length).toBeGreaterThan(0);
+    expect(mock.callOptions.some((o) => o.continueStraight !== undefined)).toBe(false);
+  });
+});
