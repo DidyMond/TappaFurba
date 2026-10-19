@@ -46,7 +46,7 @@ apps/
     public/             Icone PWA, favicon, immagine social, loghi delle bandiere (brands/), anteprime degli stili
     scripts/            generate-icons, fetch-brands, verify-pwa-build
   api/                Backend
-    src/routes/         /health, /search, /geocode, /ingest
+    src/routes/         /health, /search, /nearby, /geocode, /ingest
     src/search/         SearchService (la ricerca), repository PostGIS, memoria delle ricerche
     src/providers/      Interfacce e implementazioni: routing, geocoding, dati MIMIT, prezzi live
     src/live-prices/    Aggiornamento dei prezzi per riquadro (coda, breaker, deadline)
@@ -110,6 +110,16 @@ Il file MIMIT è pubblicato ogni mattina ma fotografa lo stato **alle 8 del gior
 
 I risultati restano **15 minuti in memoria** (`SearchSessionStore`): servono a `GET /search/:id/stations/:stationId` (dettaglio) e `…/route` (percorso con la sosta, per «Apri nel Navigatore») senza rifare la ricerca. Sono valori derivati (distanze e durate), mai risposte grezze del provider.
 
+#### «Intorno a me»: la stessa ricerca attorno a un punto
+
+`POST /nearby` (`SearchService.searchNearby`) risponde alla domanda «sono qui, dove faccio il pieno?»: punto di partenza (posizione o indirizzo), raggio (da 1 a 10 km, predefinito 5, come il MIMIT) e gli stessi parametri del veicolo. Condivide con `/search` tutto tranne la geometria (`SearchArea`), quindi sessione, ricalcolo in background, dettaglio, percorso con la sosta, prezzi in tempo reale e tetti di spesa sono gli stessi:
+
+- **Area.** Una query PostGIS con un `POINT` al posto del tracciato (`ST_DWithin` entro il raggio, in linea d'aria). Il raggio decide quali stazioni entrano; **non** c'è il limite ai km extra del giro, che in «In viaggio» è lo slider della deviazione.
+- **Prezzo di riferimento.** `computeAreaReferencePrice`: mediana delle stazioni nel raggio (livello `area`); sotto le 3 stazioni, quella nazionale. Manca il livello «sul percorso» (entro 500 m), che con un punto sarebbe troppo locale.
+- **Costo del tragitto.** Il giro completo origine → stazione → origine: stima geometrica `2 × distanza × 1,25` e, per le prime 5, Directions reale. Nell'elenco si mostra la distanza di sola andata (metà del giro); il giro intero sta in fondo alla scheda e nel dettaglio.
+- **Nessun percorso A→B.** Niente chiamata di routing in fase 1: la risposta ha `nearby` (punto e raggio) al posto di `route`, e `lateralDistanceKm` è la distanza dal punto. `alongRouteKm` vale 0.
+- **Nessuna stazione conviene.** Il giro può costare più dello sconto rispetto al prezzo medio della zona: se nessuna stazione fa risparmiare, la UI lo dice sopra l'elenco, che resta ordinato.
+
 ### 3. Prezzi in tempo reale
 
 Il sito dell'Osservaprezzi si interroga per zona (un punto e un raggio fino a 10 km). Il territorio è diviso in **riquadri fissi di 14 km** (`packages/core/src/geo/tiles.ts`): il cerchio da 10 km centrato su un riquadro lo contiene per intero. Così:
@@ -130,8 +140,8 @@ La risposta di `/search` dichiara lo stato (`live`, `partial`, `unavailable`, `d
 
 Mapbox non ha un tetto di spesa nativo, quindi l'API si protegge da sola:
 
-- **Limiti per IP** su `/search` (20 al minuto), `/geocode` (120), dettaglio e polling.
-- **Kill switch** (`BudgetedRoutingProvider` + `DirectionsBudget`, contatore in `api_usage`): oltre `DIRECTIONS_SOFT_LIMIT` (80.000/mese) si smette di verificare col routing reale e restano le stime; oltre `DIRECTIONS_HARD_LIMIT` (98.000) `/search` risponde 503. Il tetto del piano gratuito è 100.000 chiamate al mese.
+- **Limiti per IP** su `/search` e `/nearby` (20 al minuto ciascuno, con contatori separati), `/geocode` (120), dettaglio e polling.
+- **Kill switch** (`BudgetedRoutingProvider` + `DirectionsBudget`, contatore in `api_usage`): oltre `DIRECTIONS_SOFT_LIMIT` (80.000/mese) si smette di verificare col routing reale e restano le stime; oltre `DIRECTIONS_HARD_LIMIT` (98.000) `/search` e `/nearby` rispondono 503. Il tetto del piano gratuito è 100.000 chiamate al mese.
 - **Tetto del geocoding** (`BudgetedGeocodingProvider`, servizio `mapbox-geocoding` in `api_usage`): autocomplete e reverse si contano insieme, su tutti gli IP. Oltre `GEOCODING_HARD_LIMIT` (95.000/mese; piano gratuito 100.000) l'API non chiama più Mapbox e risponde 503 `BUDGET_EXHAUSTED`. Serve perché il rate limit per IP conta le richieste dei client, non il totale, e le due rotte hanno contatori separati: un solo IP può far partire fino al doppio del limite al minuto, e con più IP il consumo cresce senza tetto. Le richieste respinte non si contano.
 
 ### 6. Frontend
