@@ -38,7 +38,11 @@ export interface CalibrationReport {
   byBand: Array<{ label: string; stats: RatioStats | null }>;
 }
 
-/** Fasce di distanza in linea d'aria (km), come lo script le campiona: [da, a). */
+/**
+ * Fasce di distanza in linea d'aria (km), come lo script le campiona: [da, a). L'ultima arriva a 10,01 e non a 10 di proposito:
+ * il DB cerca entro 10 km con `ST_DWithin` su geography (ellissoide), mentre qui la distanza è sferica (haversine) e una stazione
+ * al limite può risultare di qualche metro oltre i 10 km. L'etichetta mostra 10.
+ */
 export const DEFAULT_BANDS: ReadonlyArray<readonly [number, number]> = [
   [0.3, 2],
   [2, 4],
