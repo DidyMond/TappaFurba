@@ -11,6 +11,7 @@ import {
   createRouteProjector,
   distanceKm,
   estimateProxyDetour,
+  NEARBY_PROXY_SPEED_KMH,
   pointToWkt,
   resolveDetour,
   routeToWkt,
@@ -98,6 +99,8 @@ interface SearchArea {
   /** Punti che coprono l'area per l'aggiornamento in tempo reale: il tracciato semplificato, o il solo punto. */
   livePricesPath: readonly Coordinate[];
   project(point: Coordinate): RouteProjection;
+  /** Stima della fase 1 del giro per una stazione a questa distanza laterale (km uguali nelle due modalità, minuti no). */
+  proxyDetour(lateralDistanceKm: number): Detour;
   /** Km extra massimi del giro (`Infinity` in «Intorno a me»: lì conta solo il raggio). */
   detourLimitKm: number;
   referencePrice(samples: readonly PriceSample[], national: NationalPrice | null): ReferencePrice | null;
@@ -140,6 +143,7 @@ export class SearchService {
         radiusKm: clamp(request.maxDetourKm, MIN_CORRIDOR_RADIUS_KM, MAX_CORRIDOR_RADIUS_KM),
         livePricesPath: simplified,
         project: ([lon, lat]) => project([lon, lat]),
+        proxyDetour: (lateralDistanceKm) => estimateProxyDetour(lateralDistanceKm),
         detourLimitKm: request.maxDetourKm,
         referencePrice: computeReferencePrice,
       },
@@ -173,6 +177,8 @@ export class SearchService {
         radiusKm,
         livePricesPath: [origin],
         project: (point) => ({ lateralDistanceKm: distanceKm(origin, point), alongRouteKm: 0 }),
+        // Giro breve da porta a porta: velocità media molto più bassa di quella del corridoio (vedi NEARBY_PROXY_SPEED_KMH).
+        proxyDetour: (lateralDistanceKm) => estimateProxyDetour(lateralDistanceKm, { speedKmh: NEARBY_PROXY_SPEED_KMH }),
         detourLimitKm: Number.POSITIVE_INFINITY,
         referencePrice: computeAreaReferencePrice,
       },
@@ -220,7 +226,7 @@ export class SearchService {
     // Stazioni scartate SOLO per l'età del prezzo che, per la stima geometrica, starebbero entro la deviazione massima.
     const staleCount = staleRows.filter((stale) => {
       const { lateralDistanceKm } = area.project([stale.lon, stale.lat]);
-      return estimateProxyDetour(lateralDistanceKm).km <= area.detourLimitKm;
+      return area.proxyDetour(lateralDistanceKm).km <= area.detourLimitKm;
     }).length;
 
     const samples: PriceSample[] = candidates.map((c) => ({
@@ -243,7 +249,7 @@ export class SearchService {
     const context: ScoringContext = { request: options, referencePrice: reference.value };
     const scored: StationResult[] = [];
     for (const candidate of candidates) {
-      const detour = estimateProxyDetour(candidate.lateralDistanceKm);
+      const detour = area.proxyDetour(candidate.lateralDistanceKm);
       if (detour.km > area.detourLimitKm) continue;
       scored.push(scoreCandidate(candidate, detour, "proxy", context));
     }

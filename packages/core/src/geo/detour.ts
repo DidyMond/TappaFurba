@@ -13,6 +13,14 @@ export const PROXY_CIRCUITY_FACTOR = 1.25;
 /** Velocità media assunta sul tratto di deviazione (strade locali), km/h. */
 export const PROXY_DETOUR_SPEED_KMH = 40;
 
+/**
+ * Velocità media assunta per i minuti del giro A→stazione→A di «Intorno a me», km/h. Non è un limite di velocità: è la media da
+ * porta a porta di giri brevi (semafori, incroci, svolte, sensi unici, partenza e inversione). Misurata sulla mediana di giri
+ * reali (Directions) in città e fuori città; i 40 km/h del corridoio, che valgono per un tratto di strada locale tra due punti di
+ * un percorso, la sovrastimano quasi del doppio e facevano apparire troppo convenienti le stazioni non ancora verificate.
+ */
+export const NEARBY_PROXY_SPEED_KMH = 22;
+
 export interface Detour {
   km: number;
   minutes: number;
@@ -21,14 +29,19 @@ export interface Detour {
 /**
  * Stima proxy: si esce dal tracciato nel punto più vicino, si raggiunge la
  * stazione e si rientra nello stesso punto (andata e ritorno = 2 × distanza
- * laterale), corretta per la tortuosità stradale.
+ * laterale), corretta per la tortuosità stradale. I minuti usano la velocità media
+ * del proxy (`PROXY_DETOUR_SPEED_KMH`) o quella passata in `options.speedKmh`.
  */
-export function estimateProxyDetour(lateralDistanceKm: number): Detour {
+export function estimateProxyDetour(lateralDistanceKm: number, options: { speedKmh?: number } = {}): Detour {
   if (!Number.isFinite(lateralDistanceKm) || lateralDistanceKm < 0) {
     throw new RangeError(`lateralDistanceKm deve essere >= 0 (ricevuto ${lateralDistanceKm})`);
   }
+  const speedKmh = options.speedKmh ?? PROXY_DETOUR_SPEED_KMH;
+  if (!(speedKmh > 0) || !Number.isFinite(speedKmh)) {
+    throw new RangeError(`speedKmh deve essere > 0 (ricevuto ${speedKmh})`);
+  }
   const km = 2 * lateralDistanceKm * PROXY_CIRCUITY_FACTOR;
-  return { km, minutes: (km / PROXY_DETOUR_SPEED_KMH) * 60 };
+  return { km, minutes: (km / speedKmh) * 60 };
 }
 
 export interface RouteMetrics {

@@ -1,4 +1,4 @@
-import { PROXY_CIRCUITY_FACTOR, tileForPoint } from "@tappafurba/core";
+import { NEARBY_PROXY_SPEED_KMH, PROXY_CIRCUITY_FACTOR, PROXY_DETOUR_SPEED_KMH, tileForPoint } from "@tappafurba/core";
 import type { NearbyRequest, SearchRequest, StationPriceEntry } from "@tappafurba/shared";
 import { describe, expect, it } from "vitest";
 import { AppError, BudgetExhaustedError, ProviderError } from "../../src/errors";
@@ -1459,5 +1459,65 @@ describe("SearchService.searchNearby — il proxy del giro è un fattore unico, 
   it("la distanza «a X km da te» della scheda (metà del giro) è coerente col proxy: lateral × 1,25, non la sola linea d'aria", async () => {
     const { results } = await proxyOnly(new MockRoutingProvider());
     for (const r of results) expect(r.detourKm / 2).toBeCloseTo(r.lateralDistanceKm * PROXY_CIRCUITY_FACTOR, 1);
+  });
+});
+
+describe("minuti stimati della fase 1: «Intorno a me» a 22 km/h, il corridoio resta a 40 km/h", () => {
+  const nearbyRequest: NearbyRequest = {
+    origin: ORIGIN,
+    radiusKm: 5,
+    fuelType: "benzina",
+    liters: 45,
+    consumptionKmPerLiter: 15,
+    valueOfTimePerMinute: 0.15,
+    onlySelf: true,
+    maxPriceAgeHours: 72,
+    avoidMotorway: false,
+    avoidTolls: false,
+    avoidFerries: false,
+  };
+  const around = () => [
+    row({ stationId: 61, lon: 9.0, lat: 45.01, price: 1.8 }),
+    row({ stationId: 62, lon: 9.0, lat: 45.02, price: 1.82 }),
+    row({ stationId: 63, lon: 9.0, lat: 45.03, price: 1.84 }),
+    row({ stationId: 64, lon: 9.0, lat: 45.0449, price: 1.7 }),
+  ];
+  const minutesFor = (km: number, speedKmh: number) => (km / speedKmh) * 60;
+
+  it("«Intorno a me»: i minuti del giro stimato sono km / 22 km/h, i km restano 2 × distanza × 1,25", async () => {
+    const { service } = buildService(around(), { budget: "hard_limit" });
+    const { results } = await service.searchNearby(nearbyRequest);
+    expect(NEARBY_PROXY_SPEED_KMH).toBe(22);
+    for (const r of results) {
+      expect(r.detourSource).toBe("proxy");
+      expect(Math.abs(r.detourKm / (2 * r.lateralDistanceKm) - PROXY_CIRCUITY_FACTOR)).toBeLessThan(0.01);
+      expect(Math.abs(r.detourMinutes - minutesFor(r.detourKm, NEARBY_PROXY_SPEED_KMH))).toBeLessThan(0.1);
+    }
+  });
+
+  it("«In viaggio» non cambia: i minuti stimati restano a 40 km/h", async () => {
+    const { service } = buildService([...onRoute(), row({ stationId: 65, lon: 9.5, lat: 45.012, price: 1.7 })], { budget: "hard_limit" });
+    const { results } = await service.search(request);
+    const detoured = results.filter((r) => r.detourKm > 0);
+    expect(detoured.length).toBeGreaterThan(0);
+    for (const r of detoured) expect(Math.abs(r.detourMinutes - minutesFor(r.detourKm, PROXY_DETOUR_SPEED_KMH))).toBeLessThan(0.1);
+  });
+
+  it("a parità di distanza e prezzo il costo stimato del giro è più alto in «Intorno a me» (tempo più lungo): risparmio netto più basso", async () => {
+    // Stesso prezzo di riferimento (manuale) e stessa distanza dal punto o dal tracciato (~2,2 km): cambia solo la velocità del proxy.
+    const nearbyStation = row({ stationId: 71, lon: 9.0, lat: 45.0 + 2.2 / 111.19, price: 1.7 });
+    const tripStation = row({ stationId: 71, lon: 9.0 + 2.2 / 78.6, lat: 45.1, price: 1.7 }); // a est del percorso 9,0 / 45,0 → 45,2
+    const nearby = await buildService([nearbyStation], { budget: "hard_limit" }).service.searchNearby({ ...nearbyRequest, referencePriceOverride: 1.9 });
+    const trip = await buildService([tripStation], { budget: "hard_limit" }).service.search({
+      ...request,
+      destination: { lon: 9.0, lat: 45.2 },
+      maxDetourKm: 10,
+      referencePriceOverride: 1.9,
+    });
+    const a = nearby.results[0]!;
+    const b = trip.results[0]!;
+    expect(a.detourKm).toBeCloseTo(b.detourKm, 0);
+    expect(a.detourMinutes).toBeGreaterThan(b.detourMinutes * 1.7);
+    expect(a.netSavings).toBeLessThan(b.netSavings);
   });
 });
