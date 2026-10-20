@@ -497,7 +497,7 @@ describe("POST /nearby — «Intorno a me»", () => {
     expect(response.json().error.code).toBe("NO_PRICE_DATA");
   });
 
-  it("RATE LIMIT — stesso limite per minuto di /search, con un contatore proprio", async () => {
+  it("RATE LIMIT — oltre il massimo per minuto /nearby risponde 429 RATE_LIMITED", async () => {
     const app = await makeNearbyApp({ searchRateLimitPerMinute: 2 });
     const statuses: number[] = [];
     for (let i = 0; i < 4; i++) {
@@ -505,6 +505,18 @@ describe("POST /nearby — «Intorno a me»", () => {
     }
     expect(statuses).toEqual([200, 200, 429, 429]);
     expect((await app.inject({ method: "POST", url: "/nearby", payload: nearbyBody })).json().error.code).toBe("RATE_LIMITED");
+  });
+
+  it("RATE LIMIT — /nearby e /search hanno contatori separati: l'uno non consuma il limite dell'altro (e ciascuno ha il suo)", async () => {
+    // Stesso punto di partenza per le due rotte; il percorso A→B (a nord, +0,2°) lascia sul corridoio le stesse stazioni di prova.
+    const trip = { origin: { lon: 9.0, lat: 45.0 }, destination: { lon: 9.0, lat: 45.2 }, fuelType: "benzina" };
+    const app = await makeNearbyApp({ searchRateLimitPerMinute: 2 });
+    const call = async (url: "/search" | "/nearby") => (await app.inject({ method: "POST", url, payload: url === "/search" ? trip : nearbyBody })).statusCode;
+
+    // 2 su /search + 2 su /nearby, con il limite a 2 per rotta: tutte e quattro passano...
+    expect([await call("/search"), await call("/search"), await call("/nearby"), await call("/nearby")]).toEqual([200, 200, 200, 200]);
+    // ...e subito dopo ciascuna rotta ha esaurito il proprio.
+    expect([await call("/search"), await call("/nearby")]).toEqual([429, 429]);
   });
 
   it("il polling e il dettaglio della stazione funzionano con l'id di una ricerca «Intorno a me»", async () => {

@@ -1407,7 +1407,9 @@ describe("SearchService — inversione di marcia alla stazione", () => {
 
 /**
  * Il proxy del giro di «Intorno a me» è un fattore unico fisso (2 × distanza × PROXY_CIRCUITY_FACTOR): non deriva da nessun
- * percorso, quindi non può ereditarne la tortuosità. Questi test fissano le garanzie chieste dalla revisione indipendente.
+ * percorso, quindi non può ereditarne la tortuosità. Questi test provano la sola stima della fase 1: girano con il budget al
+ * limite, quindi la verifica col routing non parte. Dopo la verifica in background il giro è quello reale del provider e la
+ * classifica può cambiare: è voluto (vedi i test su `searchNearby` che seguono la verifica).
  */
 describe("SearchService.searchNearby — il proxy del giro è un fattore unico, indipendente da qualsiasi percorso", () => {
   const nearbyRequest: NearbyRequest = {
