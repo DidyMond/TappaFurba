@@ -39,3 +39,6 @@ docs/DEPLOY.md
 
 # Script di deploy e configurazione del server: privati (host, percorsi), non pubblicati
 scripts/*.local*
+
+# Note di lavoro private (decisioni aperte, bozze): non pubblicate
+docs/*.local.md
