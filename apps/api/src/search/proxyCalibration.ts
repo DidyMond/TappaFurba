@@ -46,6 +46,14 @@ export const DEFAULT_BANDS: ReadonlyArray<readonly [number, number]> = [
   [7, 10.01],
 ];
 
+/**
+ * I campioni entro `maxKm` di linea d'aria dal punto: l'uso tipico di «Intorno a me» (raggio predefinito 5 km). Il totale pesa
+ * allo stesso modo tutte le fasce fino a 10 km, quindi sull'uso tipico conviene guardare anche questo sottoinsieme.
+ */
+export function withinDistance(samples: readonly CalibrationSample[], maxKm: number): CalibrationSample[] {
+  return samples.filter((s) => s.euclidKm <= maxKm);
+}
+
 /** Percentile con interpolazione lineare su valori già ordinati. */
 export function percentile(sorted: readonly number[], p: number): number {
   if (sorted.length === 0) throw new RangeError("percentile: serve almeno un valore");
@@ -146,3 +154,71 @@ export function buildCalibrationReport(
 
 /** Soglia oltre la quale lo scarto sistematico dei km è «rilevante» e si propone un fattore a parte. */
 export const RELEVANT_GAP = 0.15;
+
+export interface CostParameters {
+  fuelPricePerLiter: number;
+  consumptionKmPerLiter: number;
+  valueOfTimePerMinute: number;
+}
+
+const pct = (x: number) => `${x >= 0 ? "+" : ""}${Math.round(x * 100)}%`;
+const comma = (x: number, digits = 2) => x.toFixed(digits).replace(".", ",");
+
+function ratioLine(label: string, s: RatioStats | null): string {
+  return s
+    ? `${label.padEnd(16)} n=${String(s.count).padStart(3)} | giro vero / (2×linea d'aria): p25 ${s.p25.toFixed(2)} · mediana ${s.median.toFixed(2)} · p75 ${s.p75.toFixed(2)} | scarto km del proxy ${pct(s.proxyKmGap).padStart(5)} | minuti vero/proxy ${s.medianTimeRatio.toFixed(2)} (velocità reale mediana ${s.medianSpeedKmh.toFixed(0)} km/h) | giro > stima nel ${Math.round(s.shareUnderestimated * 100)}%`
+    : `${label.padEnd(16)} nessun campione`;
+}
+
+/**
+ * Il testo del report dello script di calibrazione (una riga per elemento): totale, solo l'uso tipico (entro `maxKm`), per zona
+ * e per fascia, confronto «che errore avrebbe una stima diversa» e verdetto. Il verdetto guarda l'uso tipico, non il totale.
+ */
+export function formatCalibrationReport(samples: readonly CalibrationSample[], options: { maxKm: number; cost: CostParameters }): string[] {
+  const { maxKm, cost } = options;
+  const report = buildCalibrationReport(samples);
+  const typical = withinDistance(samples, maxKm);
+  const typicalStats = summarizeRatios(typical);
+  const lines = [
+    `\n=== Calibrazione del proxy (il proxy assume ${PROXY_CIRCUITY_FACTOR} e ${PROXY_DETOUR_SPEED_KMH} km/h) ===`,
+    ratioLine("TOTALE", report.overall),
+    ratioLine(`entro ${maxKm} km`, typicalStats),
+    ...Object.entries(report.byArea).map(([area, stats]) => ratioLine(area, stats)),
+    "--- per fascia di distanza in linea d'aria",
+    ...report.byBand.map((band) => ratioLine(band.label, band.stats)),
+  ];
+  if (!report.overall || !typicalStats) return lines;
+
+  lines.push(
+    `\n--- Che errore avrebbe una stima diversa (costo del giro con benzina ${comma(cost.fuelPricePerLiter)} €/L, ${cost.consumptionKmPerLiter} km/L, ${comma(cost.valueOfTimePerMinute)} €/min)`,
+  );
+  const candidates = (stats: RatioStats) => [
+    { name: "attuale", factor: PROXY_CIRCUITY_FACTOR, speedKmh: PROXY_DETOUR_SPEED_KMH },
+    { name: "solo km", factor: Number(stats.median.toFixed(2)), speedKmh: PROXY_DETOUR_SPEED_KMH },
+    { name: "km e velocità", factor: Number(stats.median.toFixed(2)), speedKmh: Math.round(stats.medianSpeedKmh) },
+  ];
+  const sets: Array<[string, readonly CalibrationSample[], RatioStats]> = [
+    ["TOTALE", samples, report.overall],
+    [`entro ${maxKm} km`, typical, typicalStats],
+  ];
+  for (const [label, set, stats] of sets) {
+    lines.push(`[${label}]`);
+    for (const c of candidates(stats)) {
+      const r = evaluateWhatIf(set, c, cost);
+      if (r)
+        lines.push(
+          `  ${c.name.padEnd(14)} fattore ${c.factor.toFixed(2)} a ${String(c.speedKmh).padStart(2)} km/h | errore mediano km ${pct(r.medianKmError).padStart(5)} · minuti ${pct(r.medianMinutesError).padStart(5)} | errore mediano sul costo del giro ${r.medianCostErrorEuro.toFixed(2)} €`,
+        );
+    }
+  }
+
+  const current = evaluateWhatIf(typical, { factor: PROXY_CIRCUITY_FACTOR, speedKmh: PROXY_DETOUR_SPEED_KMH }, cost)!;
+  const parts = `km ${pct(current.medianKmError)}, minuti ${pct(current.medianMinutesError)}`;
+  lines.push(
+    Math.abs(current.medianKmError) > RELEVANT_GAP || Math.abs(current.medianMinutesError) > RELEVANT_GAP
+      ? `\nScarto rilevante (> ${RELEVANT_GAP * 100}%) nella stima attuale, entro ${maxKm} km: ${parts}. Il proxy sottostima il giro. ` +
+          `Valori mediani misurati: fattore ${typicalStats.median.toFixed(2)}, velocità media del giro ${Math.round(typicalStats.medianSpeedKmh)} km/h.`
+      : `\nScarto entro ${RELEVANT_GAP * 100}% entro ${maxKm} km (${parts}): i valori attuali restano adeguati.`,
+  );
+  return lines;
+}

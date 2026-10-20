@@ -4,10 +4,12 @@ import {
   buildCalibrationReport,
   type CalibrationSample,
   evaluateWhatIf,
+  formatCalibrationReport,
   percentile,
   realFactor,
   RELEVANT_GAP,
   summarizeRatios,
+  withinDistance,
 } from "../../src/search/proxyCalibration";
 
 /** Campione costruito apposta: giro reale = 2 × linea d'aria × `factor`, alla velocità `speedKmh`. Dati inventati, nessuna misura vera. */
@@ -138,5 +140,71 @@ describe("evaluateWhatIf — che errore avrebbe un altro fattore", () => {
 
   it("senza campioni non c'è nulla da valutare", () => {
     expect(evaluateWhatIf([], { factor: 1.25, speedKmh: 40 })).toBeNull();
+  });
+});
+
+describe("withinDistance — l'uso tipico (entro N km)", () => {
+  const samples = [sample(1, 1.8, 18), sample(4.9, 1.6, 25), sample(5, 1.5, 25), sample(5.1, 1.3, 30), sample(9, 1.2, 36)];
+
+  it("tiene i campioni fino a N km compreso e scarta gli altri", () => {
+    expect(withinDistance(samples, 5).map((s) => s.euclidKm)).toEqual([1, 4.9, 5]);
+    expect(withinDistance(samples, 0.5)).toEqual([]);
+    expect(withinDistance(samples, 10)).toHaveLength(5);
+  });
+
+  it("il totale pesa le fasce lunghe: sull'uso tipico lo scarto del proxy è maggiore del totale", () => {
+    const total = summarizeRatios(samples)!;
+    const typical = summarizeRatios(withinDistance(samples, 5))!;
+    expect(typical.median).toBeGreaterThan(total.median);
+    expect(typical.proxyKmGap).toBeGreaterThan(total.proxyKmGap);
+  });
+});
+
+describe("formatCalibrationReport — testo del report e verdetto", () => {
+  const cost = { fuelPricePerLiter: 1.9, consumptionKmPerLiter: 15, valueOfTimePerMinute: 0.15 };
+  const text = (samples: CalibrationSample[], options: { maxKm?: number; cost?: typeof cost } = {}) =>
+    formatCalibrationReport(samples, { maxKm: options.maxKm ?? 5, cost: options.cost ?? cost }).join("\n");
+
+  it("giro e minuti come la stima: «valori attuali restano adeguati»", () => {
+    const out = text([sample(1, 1.25, 40), sample(3, 1.25, 40), sample(4, 1.25, 40)]);
+    expect(out).toContain("i valori attuali restano adeguati");
+    expect(out).not.toContain("Scarto rilevante");
+  });
+
+  it("giro 1,5 volte e 20 km/h: «scarto rilevante» con i valori misurati", () => {
+    const out = text([sample(1, 1.5, 20), sample(3, 1.5, 20), sample(4, 1.5, 20)]);
+    expect(out).toContain("Scarto rilevante (> 15%)");
+    expect(out).toContain("fattore 1.50, velocità media del giro 20 km/h");
+  });
+
+  it("anche solo i minuti sballati bastano per il verdetto (km giusti, velocità metà)", () => {
+    const out = text([sample(1, 1.25, 20), sample(3, 1.25, 20)]);
+    expect(out).toContain("Scarto rilevante");
+    expect(out).toMatch(/km \+0%/);
+  });
+
+  it("il verdetto guarda l'uso tipico (entro maxKm), non il totale", () => {
+    // Fino a 5 km il proxy è giusto; oltre, il giro reale è molto più lungo e trascina il totale.
+    const near = [sample(1, 1.25, 40), sample(2, 1.25, 40), sample(3, 1.25, 40)];
+    const far = [sample(8, 2, 20), sample(9, 2, 20), sample(9.5, 2, 20), sample(9.9, 2, 20)];
+    const out = text([...near, ...far], { maxKm: 5 });
+    expect(out).toContain("i valori attuali restano adeguati");
+    expect(out).toContain("entro 5 km");
+  });
+
+  it("i costi passati compaiono nell'intestazione e cambiano l'errore sul costo in euro", () => {
+    const samples = [sample(2, 1.5, 20), sample(3, 1.5, 20)];
+    const base = text(samples);
+    const expensive = text(samples, { cost: { fuelPricePerLiter: 2.5, consumptionKmPerLiter: 10, valueOfTimePerMinute: 0.3 } });
+    expect(base).toContain("benzina 1,90 €/L, 15 km/L, 0,15 €/min");
+    expect(expensive).toContain("benzina 2,50 €/L, 10 km/L, 0,30 €/min");
+    const euro = (out: string) => Number(/attuale .*costo del giro (\d+\.\d+) €/.exec(out)![1]);
+    expect(euro(expensive)).toBeGreaterThan(euro(base));
+  });
+
+  it("senza campioni stampa solo l'intestazione, senza verdetto né errori", () => {
+    const out = text([]);
+    expect(out).toContain("nessun campione");
+    expect(out).not.toContain("Scarto");
   });
 });

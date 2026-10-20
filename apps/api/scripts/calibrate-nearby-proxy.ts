@@ -11,15 +11,19 @@
  *
  * Facoltativi: --per-band <n> (stazioni per fascia e per punto, 3), --point "etichetta:tipo:lon,lat" (si può ripetere; tipo
  * libero, di solito «urbano» o «extraurbano»). Senza --point usa alcuni luoghi pubblici noti.
+ * Parametri del costo del giro nel confronto «che errore avrebbe una stima diversa» (gli stessi del risparmio netto, che usa il
+ * prezzo di riferimento della zona diviso il consumo): --fuel-price <€/L, 1,90>, --consumption <km/L, 15>, --vtime <€/min, 0,15>.
+ * --max-km <km, 5> aggiunge il riepilogo dei soli campioni entro quella distanza (l'uso tipico: il totale pesa allo stesso modo
+ * tutte le fasce fino a 10 km); il verdetto finale si basa su quel sottoinsieme.
  *
  * Costa una chiamata Directions per stazione misurata (punti × 4 fasce × per-band: con i valori di fabbrica ~100), FUORI dal
  * contatore mensile `api_usage`. Non scrive nulla sul DB, non salva le risposte e non stampa mai token. Non fa parte dei test.
  */
-import { distanceKm, pointToWkt, PROXY_CIRCUITY_FACTOR, PROXY_DETOUR_SPEED_KMH, type Coordinate } from "@tappafurba/core";
+import { distanceKm, pointToWkt, type Coordinate } from "@tappafurba/core";
 import { db } from "../src/db";
 import { env } from "../src/env";
 import { MapboxRoutingProvider } from "../src/providers/routing/MapboxRoutingProvider";
-import { buildCalibrationReport, DEFAULT_BANDS, evaluateWhatIf, RELEVANT_GAP, type CalibrationSample, type RatioStats } from "../src/search/proxyCalibration";
+import { DEFAULT_BANDS, formatCalibrationReport, type CalibrationSample } from "../src/search/proxyCalibration";
 import { PostgisStationRepository } from "../src/search/PostgisStationRepository";
 
 interface Point {
@@ -50,6 +54,17 @@ for (let i = 0; i < argv.length; i++) {
   if (value && !value.startsWith("--")) i++;
 }
 const perBand = Number(flags.get("per-band")?.[0] ?? 3);
+const numberFlag = (name: string, fallback: number) => {
+  const value = Number(flags.get(name)?.[0] ?? fallback);
+  if (!(value > 0)) throw new Error(`--${name} deve essere un numero positivo`);
+  return value;
+};
+const cost = {
+  fuelPricePerLiter: numberFlag("fuel-price", 1.9),
+  consumptionKmPerLiter: numberFlag("consumption", 15),
+  valueOfTimePerMinute: numberFlag("vtime", 0.15),
+};
+const maxKm = numberFlag("max-km", 5);
 
 const customPoints = (flags.get("point") ?? []).map((spec): Point => {
   const [label, area, lonLat] = spec.split(":");
@@ -93,43 +108,4 @@ for (const point of points) {
 }
 await db.destroy();
 
-const pct = (x: number) => `${x >= 0 ? "+" : ""}${Math.round(x * 100)}%`;
-const line = (label: string, s: RatioStats | null) =>
-  s
-    ? `${label.padEnd(16)} n=${String(s.count).padStart(3)} | giro vero / (2×linea d'aria): p25 ${s.p25.toFixed(2)} · mediana ${s.median.toFixed(2)} · p75 ${s.p75.toFixed(2)} | scarto km del proxy ${pct(s.proxyKmGap).padStart(5)} | minuti vero/proxy ${s.medianTimeRatio.toFixed(2)} (velocità reale mediana ${s.medianSpeedKmh.toFixed(0)} km/h) | giro > stima nel ${Math.round(s.shareUnderestimated * 100)}%`
-    : `${label.padEnd(16)} nessun campione`;
-
-const report = buildCalibrationReport(samples);
-console.log("\n=== Calibrazione del proxy (il proxy assume 1,25) ===");
-console.log(line("TOTALE", report.overall));
-for (const [area, stats] of Object.entries(report.byArea)) console.log(line(area, stats));
-console.log("--- per fascia di distanza in linea d'aria");
-for (const band of report.byBand) console.log(line(band.label, band.stats));
-if (report.overall) {
-  // Confronto «cosa succederebbe con un altro fattore»: errori mediani sugli stessi campioni.
-  console.log("\n--- Che errore avrebbe una stima diversa (sugli stessi campioni; costo con benzina 1,90 €/L, 15 km/L, 0,15 €/min)");
-  const candidates = [
-    { name: "attuale", factor: PROXY_CIRCUITY_FACTOR, speedKmh: PROXY_DETOUR_SPEED_KMH },
-    { name: "solo km", factor: Number(report.overall.median.toFixed(2)), speedKmh: PROXY_DETOUR_SPEED_KMH },
-    { name: "km e velocità", factor: Number(report.overall.median.toFixed(2)), speedKmh: Math.round(report.overall.medianSpeedKmh) },
-  ];
-  for (const c of candidates) {
-    const r = evaluateWhatIf(samples, c);
-    if (r)
-      console.log(
-        `${c.name.padEnd(14)} fattore ${c.factor.toFixed(2)} a ${String(c.speedKmh).padStart(2)} km/h | errore mediano km ${pct(r.medianKmError).padStart(5)} · minuti ${pct(r.medianMinutesError).padStart(5)} | errore mediano sul costo del giro ${r.medianCostErrorEuro.toFixed(2)} €`,
-      );
-  }
-  const current = evaluateWhatIf(samples, candidates[0]!)!;
-  const kmGap = Math.abs(current.medianKmError);
-  const minutesGap = Math.abs(current.medianMinutesError);
-  const parts = [`km ${pct(current.medianKmError)}`, `minuti ${pct(current.medianMinutesError)}`];
-  if (kmGap > RELEVANT_GAP || minutesGap > RELEVANT_GAP) {
-    console.log(
-      `\nScarto rilevante (> ${RELEVANT_GAP * 100}%) nella stima attuale: ${parts.join(", ")}. Il proxy sottostima il giro. ` +
-        `Valori mediani misurati: fattore ${report.overall.median.toFixed(2)}, velocità media del giro ${Math.round(report.overall.medianSpeedKmh)} km/h.`,
-    );
-  } else {
-    console.log(`\nScarto entro ${RELEVANT_GAP * 100}% (${parts.join(", ")}): i valori attuali restano adeguati.`);
-  }
-}
+for (const line of formatCalibrationReport(samples, { maxKm, cost })) console.log(line);
