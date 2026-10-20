@@ -42,3 +42,4 @@ scripts/*.local*
 
 # Note di lavoro private (decisioni aperte, bozze): non pubblicate
 docs/*.local.md
+apps/api/local/
