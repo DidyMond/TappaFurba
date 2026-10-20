@@ -11,6 +11,9 @@ import { RouteIcon, SavingsIcon } from "../icons";
  */
 export function ImpactBento({ detail }: { detail: StationDetailResponse }) {
   const { detour, impact, referencePrice, liters } = detail;
+  // «Intorno a me»: il costo è quello del giro completo da dove sei (andata e ritorno), non un extra rispetto a un percorso.
+  const nearby = detail.mode === "nearby";
+  const sign = nearby ? "" : "+";
   const estimated = detour.source === "proxy";
   const saves = impact.netSavings > 0;
   const cheaper = impact.priceDifferencePerLiter < 0;
@@ -20,27 +23,36 @@ export function ImpactBento({ detail }: { detail: StationDetailResponse }) {
   const label = "text-label-md font-label-md flex items-center justify-between gap-1";
 
   return (
-    <section aria-label="Impatto sul tuo viaggio" className="rounded-lg bg-surface-container-lowest shadow-md border border-outline-variant/30 p-space-lg flex flex-col gap-space-md">
-      <h2 className="text-headline-sm font-headline-sm text-on-surface">Impatto sul tuo viaggio</h2>
+    <section
+      aria-label={nearby ? "Impatto del rifornimento" : "Impatto sul tuo viaggio"}
+      className="rounded-lg bg-surface-container-lowest shadow-md border border-outline-variant/30 p-space-lg flex flex-col gap-space-md"
+    >
+      <h2 className="text-headline-sm font-headline-sm text-on-surface">{nearby ? "Impatto del rifornimento" : "Impatto sul tuo viaggio"}</h2>
 
       <div className="grid grid-cols-3 gap-space-sm">
         <div data-testid="tile-detour" className={`${tile} bg-surface-container-low`}>
           <span className={`${label} text-on-surface-variant`}>
-            Deviazione
+            {nearby ? "Andata e ritorno" : "Deviazione"}
             <RouteIcon className="w-4 h-4 text-on-secondary-fixed-variant" />
           </span>
           <span className="text-headline-sm font-headline-sm tabular-nums text-on-surface">
-            {approx}+{formatKm(detour.km)}
+            {approx}
+            {sign}
+            {formatKm(detour.km)}
           </span>
           <span className="text-label-md font-label-md tabular-nums text-on-secondary-fixed-variant">
-            {approx}+{formatDetourMinutes(detour.minutes)} guida
+            {approx}
+            {sign}
+            {formatDetourMinutes(detour.minutes)} guida
           </span>
           <span
             data-testid="detour-source"
             title={
               estimated
                 ? "Stima approssimata: il percorso reale non è stato calcolato (servizio dei percorsi non disponibile), i valori sono indicativi"
-                : "Deviazione calcolata sul percorso reale A→stazione→B con il servizio di percorsi di Mapbox"
+                : nearby
+                  ? "Giro calcolato sul percorso reale da dove sei alla stazione e ritorno, con il servizio di percorsi di Mapbox"
+                  : "Deviazione calcolata sul percorso reale A→stazione→B con il servizio di percorsi di Mapbox"
             }
             className={`text-label-sm font-label-sm leading-tight break-words ${estimated ? "text-on-surface-variant" : "text-on-primary-fixed-variant"}`}
           >
@@ -76,8 +88,8 @@ export function ImpactBento({ detail }: { detail: StationDetailResponse }) {
       </div>
 
       <p className="text-body-sm font-body-sm text-on-surface-variant tabular-nums">
-        Riferimento €{formatPrice(referencePrice.value)}/L ({referenceLevelText(referencePrice.level, referencePrice.sampleSize)}). Risparmio lordo{" "}
-        {formatEuro(impact.grossSavings)} − costo della deviazione {formatEuro(impact.detourCost)}.
+        Riferimento €{formatPrice(referencePrice.value)}/L ({referenceLevelText(referencePrice.level, referencePrice.sampleSize, nearby)}). Risparmio lordo{" "}
+        {formatEuro(impact.grossSavings)} − costo {nearby ? "del giro" : "della deviazione"} {formatEuro(impact.detourCost)}.
       </p>
     </section>
   );

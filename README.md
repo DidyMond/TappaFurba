@@ -3,9 +3,9 @@
 ![Licenza: Apache-2.0](https://img.shields.io/badge/licenza-Apache--2.0-blue.svg)
 [![Dona](https://img.shields.io/badge/Dona-PayPal-00457C?logo=paypal&logoColor=white)](https://paypal.me/DavideDimo)
 
-**Il carburante più conveniente lungo il tuo percorso.**
+**Il carburante più conveniente lungo il tuo percorso, o intorno a te.**
 
-TappaFurba è una web app (PWA) per chi guida in Italia. Inserisci partenza e arrivo: l'app cerca i distributori **lungo** il percorso (non in un raggio attorno a un punto) e li ordina per **risparmio netto**, cioè quanto risparmi sul prezzo meno quanto ti costa la deviazione in km e in minuti. I prezzi sono quelli ufficiali dell'Osservaprezzi Carburanti del MIMIT.
+TappaFurba è una web app (PWA) per chi guida in Italia. Inserisci partenza e arrivo: l'app cerca i distributori **lungo** il percorso (non in un raggio attorno a un punto) e li ordina per **risparmio netto**, cioè quanto risparmi sul prezzo meno quanto ti costa la deviazione in km e in minuti. Se invece sei già da qualche parte e devi solo fare il pieno, **«Intorno a me»** cerca attorno a un punto (la tua posizione o un indirizzo, fino a 10 km) con lo stesso calcolo, contando il giro completo andata e ritorno. I prezzi sono quelli ufficiali dell'Osservaprezzi Carburanti del MIMIT.
 
 <p align="center">
   <img src="docs/screenshots/home.jpg" alt="Home: barra di ricerca e tragitti frequenti" width="22%">
@@ -31,7 +31,8 @@ risparmio netto = (prezzo di riferimento − prezzo del distributore) × litri d
 ### Cosa c'è dentro
 
 - Ricerca A→B con suggerimenti d'indirizzo, posizione attuale e tragitti frequenti (solo testi, salvati sul dispositivo).
-- Risultati con mappa (Mapbox GL), pin con prezzo e logo della bandiera, elenco ordinabile («più conveniente», «minor deviazione») e opzioni di percorso (evita autostrade, pedaggi, traghetti).
+- **«Intorno a me»:** il distributore più conveniente attorno a un punto (posizione attuale o indirizzo, raggio da 1 a 10 km), con lo stesso calcolo del risparmio sul giro andata e ritorno.
+- Risultati con mappa (Mapbox GL), pin con prezzo e logo della bandiera, elenco ordinabile («più conveniente», «minor deviazione» o «più vicina») e opzioni di percorso (evita autostrade, pedaggi, traghetti).
 - Dettaglio del distributore: impatto sul viaggio, listino per carburante e modalità, copia dell'indirizzo, condivisione e apertura nel navigatore (Apple Maps, Google Maps, Waze).
 - Impostazioni: profilo veicolo, consumi (km/L o L/100 km), carburante predefinito, deviazione massima, valore del tempo, soglia di validità dei prezzi, tema della mappa.
 - **Prezzi in tempo reale:** il file giornaliero MIMIT ha 1–2 giorni di ritardo; prima di ogni ricerca l'API aggiorna le zone attraversate dal percorso dal sito dell'Osservaprezzi (vedi le [note sulle fonti](docs/ATTRIBUTION.md#note-sulle-fonti)).
@@ -93,6 +94,13 @@ sleep 4   # la verifica col routing reale continua in background
 curl -s "http://localhost:3001/search/$(echo "$RES" | jq -r .searchId)" | jq .refinement
 ```
 
+Stesso esempio per «Intorno a me» (un punto e un raggio in km, da 1 a 10):
+
+```bash
+curl -s -X POST http://localhost:3001/nearby -H 'Content-Type: application/json' \
+  -d '{"origin":{"lon":9.204,"lat":45.4864},"radiusKm":5,"fuelType":"benzina"}' | jq '.referencePrice, (.results | .[:5])'
+```
+
 ## Sviluppo
 
 ### Comandi
@@ -116,11 +124,11 @@ curl -s "http://localhost:3001/search/$(echo "$RES" | jq -r .searchId)" | jq .re
 
 | Suite | Test | Richiede |
 |---|---|---|
-| `packages/core` | 164 | niente |
-| `apps/api` | 277 | niente (provider di prova, repository in memoria) |
-| `apps/web` | 720 | niente (la mappa WebGL è sostituita da uno stub in jsdom) |
-| `pnpm test:db` | 32 | `docker compose up -d`, `pnpm db:migrate`, `pnpm ingest` |
-| `pnpm test:e2e` | 15 | Chromium: `pnpm --filter @tappafurba/e2e exec playwright install chromium`, oppure `E2E_CHROME_CHANNEL=chrome` per usare il Chrome installato |
+| `packages/core` | 173 | niente |
+| `apps/api` | 323 | niente (provider di prova, repository in memoria) |
+| `apps/web` | 771 | niente (la mappa WebGL è sostituita da uno stub in jsdom) |
+| `pnpm test:db` | 33 | `docker compose up -d`, `pnpm db:migrate`, `pnpm ingest` |
+| `pnpm test:e2e` | 19 | Chromium: `pnpm --filter @tappafurba/e2e exec playwright install chromium`, oppure `E2E_CHROME_CHANNEL=chrome` per usare il Chrome installato |
 
 I test end-to-end usano solo `data-testid`. Avviano da soli un'API di prova (`apps/api/src/e2e`: luoghi noti, routing senza rete, stazioni fittizie in memoria) e la build di produzione del frontend: nessun database, nessuna chiave, nessuna chiamata esterna. La CI (`.github/workflows/ci.yml`) esegue test, typecheck, build, `verify:pwa` ed e2e.
 

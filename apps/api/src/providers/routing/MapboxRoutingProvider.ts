@@ -61,6 +61,8 @@ export class MapboxRoutingProvider implements RoutingProvider {
     // Directions accetta più valori separati da virgola (verificato: motorway, toll, ferry su mapbox/driving).
     const exclusions = routeExclusions(options);
     if (exclusions.length > 0) params.set("exclude", exclusions.join(","));
+    // Solo `false` cambia qualcosa: il valore predefinito di Directions per le auto è `true`.
+    if (options.continueStraight === false) params.set("continue_straight", "false");
 
     let response: Response;
     try {

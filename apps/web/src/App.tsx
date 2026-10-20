@@ -16,6 +16,7 @@ import { useSearch } from "./hooks/useSearch";
 import { SettingsProvider, useSettings } from "./hooks/useSettings";
 import { PRIVACY_PATH } from "./lib/links";
 import { recordRecentRoute } from "./lib/recentRoutes";
+import { isNearbyRequest } from "./lib/searchMode";
 import type { RouteExclusions } from "./lib/routeOptions";
 
 export default function App() {
@@ -49,9 +50,10 @@ function AppShell() {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- un solo avvio per ricerca.
   }, [successId]);
 
-  // Ogni ricerca riuscita alimenta «Tragitti frequenti» (storico sul dispositivo, vedi lib/recentRoutes).
+  // Ogni ricerca «In viaggio» riuscita alimenta «Tragitti frequenti» (storico sul dispositivo, vedi lib/recentRoutes).
+  // «Intorno a me» non ha un tragitto da ricordare (e il punto di partenza non si salva mai).
   useEffect(() => {
-    if (state.status !== "success") return;
+    if (state.status !== "success" || isNearbyRequest(state.request)) return;
     // Solo testi e flag «posizione attuale»: nessuna coordinata (vedi lib/recentRoutes).
     recordRecentRoute({
       origin: { text: state.labels.origin, ...(state.labels.originCurrent ? { current: true as const } : {}) },

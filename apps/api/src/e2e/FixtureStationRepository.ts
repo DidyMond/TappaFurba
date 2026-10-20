@@ -1,4 +1,4 @@
-import { createRouteProjector, type Coordinate, type NationalPrice } from "@tappafurba/core";
+import { createRouteProjector, distanceKm, type Coordinate, type NationalPrice } from "@tappafurba/core";
 import type { StationPriceEntry } from "@tappafurba/shared";
 import type { CorridorPriceRow, CorridorQuery, StaleStation, StationRepository } from "../search/StationRepository";
 
@@ -26,7 +26,7 @@ const SPEC: ReadonlyArray<{ t: number; offset: number; price: number; isSelf: bo
 
 const COMMUNICATED_AT = new Date(Date.now() - 3_600_000).toISOString();
 
-export const FIXTURE_ROWS: readonly CorridorPriceRow[] = SPEC.map((s, index) => {
+const CORRIDOR_ROWS: readonly CorridorPriceRow[] = SPEC.map((s, index) => {
   const id = 9001 + index;
   return {
     stationId: id,
@@ -45,7 +45,40 @@ export const FIXTURE_ROWS: readonly CorridorPriceRow[] = SPEC.map((s, index) => 
   };
 });
 
-/** Estrae le coordinate da un WKT `LINESTRING(lon lat, ...)`. */
+/**
+ * Stazioni FITTIZIE attorno a Torino Porta Nuova (luogo noto del geocoding di prova), per provare «Intorno a me»: sono a circa
+ * 1,2 / 2,5 / 3,8 / 6 km dal punto. Stanno lontane dal corridoio Milano–Bologna, quindi le ricerche «In viaggio» non le vedono.
+ */
+const AROUND: Coordinate = [7.6784, 45.0621];
+const AROUND_SPEC: ReadonlyArray<{ dLon: number; dLat: number; price: number; comune: string }> = [
+  { dLon: 0, dLat: 0.011, price: 1.929, comune: "Torino" },
+  { dLon: 0, dLat: 0.0225, price: 1.869, comune: "Torino" },
+  { dLon: 0.0483, dLat: 0, price: 1.959, comune: "Moncalieri" },
+  { dLon: 0, dLat: -0.054, price: 1.899, comune: "Beinasco" },
+];
+
+const NEARBY_ROWS: readonly CorridorPriceRow[] = AROUND_SPEC.map((s, index) => {
+  const id = 9101 + index;
+  return {
+    stationId: id,
+    nomeImpianto: `Stazione di prova T${index + 1}`,
+    bandiera: index % 2 === 0 ? "Marca A" : "Marca B",
+    gestore: "Gestore di prova",
+    indirizzo: `Via di Prova ${index + 1}`,
+    comune: s.comune,
+    provincia: "XX",
+    tipoImpianto: "stradale",
+    lat: AROUND[1] + s.dLat,
+    lon: AROUND[0] + s.dLon,
+    isSelf: true,
+    price: s.price,
+    communicatedAt: COMMUNICATED_AT,
+  };
+});
+
+export const FIXTURE_ROWS: readonly CorridorPriceRow[] = [...CORRIDOR_ROWS, ...NEARBY_ROWS];
+
+/** Estrae le coordinate da un WKT `LINESTRING(lon lat, ...)` o `POINT(lon lat)`. */
 function parseWkt(wkt: string): Coordinate[] {
   const inner = wkt.slice(wkt.indexOf("(") + 1, wkt.lastIndexOf(")"));
   return inner.split(",").map((pair) => {
@@ -54,13 +87,24 @@ function parseWkt(wkt: string): Coordinate[] {
   });
 }
 
+/** Distanza dal tracciato (LINESTRING) o dal punto (POINT) di un WKT, come la calcolerebbe `ST_DWithin`. */
+function distanceFromWkt(wkt: string): (target: Coordinate) => number {
+  const coords = parseWkt(wkt);
+  if (coords.length === 1) {
+    const center = coords[0]!;
+    return (target) => distanceKm(center, target);
+  }
+  const project = createRouteProjector(coords);
+  return (target) => project(target).lateralDistanceKm;
+}
+
 /** Repository in memoria per i test end-to-end: filtra per distanza dal tracciato come farebbe PostGIS. */
 export class FixtureStationRepository implements StationRepository {
   constructor(private readonly rows: readonly CorridorPriceRow[] = FIXTURE_ROWS) {}
 
   async findCorridorPrices(query: CorridorQuery): Promise<CorridorPriceRow[]> {
-    const project = createRouteProjector(parseWkt(query.routeWkt));
-    return this.rows.filter((row) => project([row.lon, row.lat]).lateralDistanceKm * 1000 <= query.radiusMeters).map((row) => ({ ...row }));
+    const distance = distanceFromWkt(query.routeWkt);
+    return this.rows.filter((row) => distance([row.lon, row.lat]) * 1000 <= query.radiusMeters).map((row) => ({ ...row }));
   }
 
   async findStaleStations(): Promise<StaleStation[]> {

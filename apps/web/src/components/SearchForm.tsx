@@ -1,12 +1,13 @@
-import type { LonLat, SearchFuelType, SearchRequest } from "@tappafurba/shared";
+import type { LonLat, SearchFuelType, SearchMode } from "@tappafurba/shared";
 import { useEffect, useRef, useState } from "react";
 import { useSettings } from "../hooks/useSettings";
 import type { SearchLabels } from "../hooks/useSearch";
 import { reverseGeocode } from "../lib/api";
-import { DETOUR_RANGE, LITERS_RANGE } from "../lib/defaults";
+import { DETOUR_RANGE, LITERS_RANGE, RADIUS_RANGE, SEARCH_DEFAULTS } from "../lib/defaults";
 import { RangeInput } from "./RangeInput";
 import { CURRENT_POSITION_TEXT, type RecentRoute } from "../lib/recentRoutes";
 import { describeResolveFailure, RecentResolveError, resolveRecentEndpoint } from "../lib/resolveRecentEndpoint";
+import type { AnySearchRequest } from "../lib/searchMode";
 import { referenceOverrideFor } from "../lib/settings";
 import { AddressInput, type Place } from "./AddressInput";
 import { ConsumptionStepper } from "./ConsumptionStepper";
@@ -22,7 +23,7 @@ export interface SearchPrefill {
 }
 
 interface SearchFormProps {
-  onSubmit: (request: SearchRequest, labels: SearchLabels) => void;
+  onSubmit: (request: AnySearchRequest, labels: SearchLabels) => void;
   busy: boolean;
   prefill?: SearchPrefill | null;
 }
@@ -37,6 +38,11 @@ interface Endpoint {
 }
 
 const EMPTY_ENDPOINT: Endpoint = { text: "", place: null };
+
+const MODES: ReadonlyArray<{ value: SearchMode; label: string }> = [
+  { value: "route", label: "In viaggio" },
+  { value: "nearby", label: "Intorno a me" },
+];
 
 /**
  * Altezza fissa delle due righe (72 px) + divisore da 1 px: i pallini stanno a 36 px dal bordo interno di ogni
@@ -69,6 +75,9 @@ export function SearchForm({ onSubmit, busy, prefill }: SearchFormProps) {
   const [fuelType, setFuelType] = useState<SearchFuelType>(settings.vehicle.defaultFuel);
   const [liters, setLiters] = useState<number>(settings.vehicle.tankLiters);
   const [maxDetourKm, setMaxDetourKm] = useState<number>(settings.defaultMaxDetourKm);
+  // «In viaggio» (A→B) oppure «Intorno a me» (un solo punto e un raggio). Il punto di partenza è lo stesso campo per entrambe.
+  const [mode, setMode] = useState<SearchMode>("route");
+  const [radiusKm, setRadiusKm] = useState<number>(SEARCH_DEFAULTS.radiusKm);
   // Il consumo della ricerca è sempre km/L (modello interno); `settings.consumptionUnit` cambia solo come lo si vede.
   const [consumption, setConsumption] = useState<number>(settings.consumptionKmPerLiter);
   // «Solo Self» e «Evita autostrada» partono dai default delle Impostazioni e restano modificabili per ricerca.
@@ -98,6 +107,7 @@ export function SearchForm({ onSubmit, busy, prefill }: SearchFormProps) {
     if (!prefill || appliedPrefill.current === prefill.key) return;
     appliedPrefill.current = prefill.key;
     resolveRun.current?.abort();
+    setMode("route");
     const { origin: from, destination: to, fuelType: fuel } = prefill.route;
     setOrigin({ text: from.text, place: null, current: from.current === true, fromHistory: true });
     setDestination({ text: to.text, place: null, current: to.current === true, fromHistory: true });
@@ -131,7 +141,8 @@ export function SearchForm({ onSubmit, busy, prefill }: SearchFormProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- si applica con un'unica esecuzione per scelta (key); userLocation serve solo come bias.
   }, [prefill]);
 
-  const ready = origin.place !== null && destination.place !== null;
+  const nearby = mode === "nearby";
+  const ready = origin.place !== null && (nearby || destination.place !== null);
 
   const swap = () => {
     setOrigin(destination);
@@ -173,26 +184,30 @@ export function SearchForm({ onSubmit, busy, prefill }: SearchFormProps) {
 
   const submit = (event: React.FormEvent) => {
     event.preventDefault();
-    if (!origin.place || !destination.place) return;
+    if (!origin.place || (!nearby && !destination.place)) return;
     const referenceOverride = referenceOverrideFor(settings, fuelType);
+    const shared = {
+      origin: { lon: origin.place.lon, lat: origin.place.lat },
+      fuelType,
+      liters,
+      consumptionKmPerLiter: consumption,
+      valueOfTimePerMinute: settings.valueOfTimePerMinute,
+      onlySelf,
+      maxPriceAgeHours: settings.maxPriceAgeHours,
+      avoidMotorway,
+      // Pedaggi e traghetti non sono nel form: si cambiano dalle Opzioni percorso nei Risultati o dai default nelle Impostazioni.
+      avoidTolls: settings.avoidTolls,
+      avoidFerries: settings.avoidFerries,
+      // Prezzo di riferimento manuale (se impostato per questo carburante): sostituisce il calcolo automatico.
+      ...(referenceOverride !== undefined ? { referencePriceOverride: referenceOverride } : {}),
+    };
+    if (nearby) {
+      onSubmit({ ...shared, radiusKm }, { origin: origin.place.label, destination: "", ...(origin.current ? { originCurrent: true } : {}) });
+      return;
+    }
+    if (!destination.place) return;
     onSubmit(
-      {
-        origin: { lon: origin.place.lon, lat: origin.place.lat },
-        destination: { lon: destination.place.lon, lat: destination.place.lat },
-        fuelType,
-        liters,
-        maxDetourKm,
-        consumptionKmPerLiter: consumption,
-        valueOfTimePerMinute: settings.valueOfTimePerMinute,
-        onlySelf,
-        maxPriceAgeHours: settings.maxPriceAgeHours,
-        avoidMotorway,
-        // Pedaggi e traghetti non sono nel form: si cambiano dalle Opzioni percorso nei Risultati o dai default nelle Impostazioni.
-        avoidTolls: settings.avoidTolls,
-        avoidFerries: settings.avoidFerries,
-        // Prezzo di riferimento manuale (se impostato per questo carburante): sostituisce il calcolo automatico.
-        ...(referenceOverride !== undefined ? { referencePriceOverride: referenceOverride } : {}),
-      },
+      { ...shared, destination: { lon: destination.place.lon, lat: destination.place.lat }, maxDetourKm },
       {
         origin: origin.place.label,
         destination: destination.place.label,
@@ -202,11 +217,65 @@ export function SearchForm({ onSubmit, busy, prefill }: SearchFormProps) {
     );
   };
 
+  // Il campo del punto di partenza è lo stesso nelle due modalità; cambia solo cosa gli sta intorno.
+  const originInput = (
+    <AddressInput
+      label={nearby ? "Posizione" : "Partenza"}
+      caption={nearby ? "Dove sei" : "Da (Partenza)"}
+      placeholder={nearby ? "Dove sei? Scrivi un indirizzo o usa il mirino" : "Da dove parti?"}
+      testId="origin-input"
+      text={origin.text}
+      onTextChange={(text) => setOrigin({ text, place: null })}
+      place={origin.place}
+      suggestions={!origin.fromHistory}
+      onPlaceSelect={(place) => setOrigin({ text: place.label, place })}
+      proximity={userLocation}
+      leading={<span className="block w-3 h-3 rounded-full bg-primary" />}
+      trailing={
+        <button
+          type="button"
+          onClick={useCurrentPosition}
+          disabled={locating}
+          aria-label="Usa la posizione attuale"
+          className="group w-11 h-11 flex items-center justify-center text-secondary disabled:opacity-50"
+        >
+          <span className="w-9 h-9 rounded-full flex items-center justify-center group-hover:bg-secondary/10 transition-colors">
+            {locating ? <SpinnerIcon className="w-4 h-4" /> : <LocateIcon />}
+          </span>
+        </button>
+      }
+    />
+  );
+
   return (
     <form onSubmit={submit} className="flex flex-col min-h-0 flex-1">
       {/* Corpo scorrevole: solo questo scorre, l'intestazione del foglio e il pulsante di ricerca restano fermi. */}
       <div className="flex-1 min-h-0 overflow-y-auto no-scrollbar px-space-xl py-space-lg flex flex-col gap-space-xl">
-        {/* Card A → B: linea tratteggiata verticale tra i due pallini, scambio sul divisore. */}
+        <div role="radiogroup" aria-label="Modalità di ricerca" data-testid="mode-switch" className="grid grid-cols-2 gap-1 p-1 rounded-full bg-surface-container-low">
+          {MODES.map(({ value, label }) => (
+            <button
+              key={value}
+              type="button"
+              role="radio"
+              aria-checked={mode === value}
+              data-testid={`mode-${value}`}
+              onClick={() => setMode(value)}
+              className={`h-10 rounded-full text-label-lg font-label-lg transition-colors ${
+                mode === value ? "bg-primary-strong text-on-primary shadow-sm" : "text-on-surface-variant hover:text-on-surface"
+              }`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+
+        {nearby ? (
+          // «Intorno a me»: un solo campo, senza destinazione né scambio.
+          <div data-testid="nearby-card" className="rounded-2xl bg-surface-container-lowest border border-outline-variant/50 shadow-md" style={{ padding: CARD_PADDING_PX }}>
+            {originInput}
+          </div>
+        ) : (
+        /* Card A → B: linea tratteggiata verticale tra i due pallini, scambio sul divisore. */
         <div
           data-testid="route-card"
           className="relative rounded-2xl bg-surface-container-lowest border border-outline-variant/50 shadow-md"
@@ -222,32 +291,7 @@ export function SearchForm({ onSubmit, busy, prefill }: SearchFormProps) {
               bottom: CARD_PADDING_PX + ROW_HALF_PX,
             }}
           />
-          <AddressInput
-            label="Partenza"
-            caption="Da (Partenza)"
-            placeholder="Da dove parti?"
-            testId="origin-input"
-            text={origin.text}
-            onTextChange={(text) => setOrigin({ text, place: null })}
-            place={origin.place}
-            suggestions={!origin.fromHistory}
-            onPlaceSelect={(place) => setOrigin({ text: place.label, place })}
-            proximity={userLocation}
-            leading={<span className="block w-3 h-3 rounded-full bg-primary" />}
-            trailing={
-              <button
-                type="button"
-                onClick={useCurrentPosition}
-                disabled={locating}
-                aria-label="Usa la posizione attuale"
-                className="group w-11 h-11 flex items-center justify-center text-secondary disabled:opacity-50"
-              >
-                <span className="w-9 h-9 rounded-full flex items-center justify-center group-hover:bg-secondary/10 transition-colors">
-                  {locating ? <SpinnerIcon className="w-4 h-4" /> : <LocateIcon />}
-                </span>
-              </button>
-            }
-          />
+          {originInput}
           {/* Divisore con il pulsante di scambio al centro (in verticale) tra i due campi. Sta 28 px a sinistra della
               colonna dei controlli (mirino, «×»): così ogni controllo dista dagli altri almeno ~45 px tra i centri e le aree di tocco da 44 px
               non si accavallano. */}
@@ -278,6 +322,7 @@ export function SearchForm({ onSubmit, busy, prefill }: SearchFormProps) {
             leading={<span className="block w-3 h-3 rounded-full bg-secondary" />}
           />
         </div>
+        )}
         {locationError && (
           <p role="alert" className="-mt-space-md text-body-sm font-body-sm text-error">
             {locationError}
@@ -306,18 +351,33 @@ export function SearchForm({ onSubmit, busy, prefill }: SearchFormProps) {
           <ConsumptionStepper value={consumption} profile={settings.consumptionKmPerLiter} unit={settings.consumptionUnit} onChange={setConsumption} />
         </div>
 
-        <div className="flex flex-col gap-space-sm">
-          <div className="flex items-center justify-between">
-            <label htmlFor="max-detour" className="text-label-sm font-label-sm font-semibold text-on-surface">
-              Deviazione massima
-            </label>
-            <output htmlFor="max-detour" className="rounded-full bg-secondary/10 text-on-secondary-fixed-variant px-space-md py-space-xs text-label-lg font-label-lg tabular-nums">
-              {maxDetourKm} km
-            </output>
+        {nearby ? (
+          <div className="flex flex-col gap-space-sm">
+            <div className="flex items-center justify-between">
+              <label htmlFor="search-radius" className="text-label-sm font-label-sm font-semibold text-on-surface">
+                Raggio di ricerca
+              </label>
+              <output htmlFor="search-radius" className="rounded-full bg-secondary/10 text-on-secondary-fixed-variant px-space-md py-space-xs text-label-lg font-label-lg tabular-nums">
+                {radiusKm} km
+              </output>
+            </div>
+            <RangeInput id="search-radius" {...RADIUS_RANGE} value={radiusKm} onChange={(event) => setRadiusKm(Number(event.target.value))} />
+            <p className="text-body-sm font-body-sm text-on-surface-variant">Distanza massima in linea d'aria da dove sei.</p>
           </div>
-          <RangeInput id="max-detour" {...DETOUR_RANGE} value={maxDetourKm} onChange={(event) => setMaxDetourKm(Number(event.target.value))} />
-          <p className="text-body-sm font-body-sm text-on-surface-variant">Km extra totali (andata e ritorno) rispetto al percorso diretto.</p>
-        </div>
+        ) : (
+          <div className="flex flex-col gap-space-sm">
+            <div className="flex items-center justify-between">
+              <label htmlFor="max-detour" className="text-label-sm font-label-sm font-semibold text-on-surface">
+                Deviazione massima
+              </label>
+              <output htmlFor="max-detour" className="rounded-full bg-secondary/10 text-on-secondary-fixed-variant px-space-md py-space-xs text-label-lg font-label-lg tabular-nums">
+                {maxDetourKm} km
+              </output>
+            </div>
+            <RangeInput id="max-detour" {...DETOUR_RANGE} value={maxDetourKm} onChange={(event) => setMaxDetourKm(Number(event.target.value))} />
+            <p className="text-body-sm font-body-sm text-on-surface-variant">Km extra totali (andata e ritorno) rispetto al percorso diretto.</p>
+          </div>
+        )}
 
         <div className="flex flex-col gap-space-lg">
           <ToggleRow label="Solo Self" description="Se disattivato include anche le stazioni solo servito." checked={onlySelf} onChange={setOnlySelf} />
@@ -342,7 +402,9 @@ export function SearchForm({ onSubmit, busy, prefill }: SearchFormProps) {
           {busy ? "Cerco le stazioni…" : "Trova il carburante più conveniente"}
         </button>
         {!ready && !busy && (
-          <p className="text-center text-body-sm font-body-sm text-on-surface-variant">Scegli partenza e destinazione dai suggerimenti per iniziare.</p>
+          <p className="text-center text-body-sm font-body-sm text-on-surface-variant">
+            {nearby ? "Scegli un indirizzo dai suggerimenti o usa la tua posizione per iniziare." : "Scegli partenza e destinazione dai suggerimenti per iniziare."}
+          </p>
         )}
       </div>
     </form>

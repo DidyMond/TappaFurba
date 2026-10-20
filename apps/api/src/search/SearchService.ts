@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import {
   type Coordinate,
+  computeAreaReferencePrice,
   computeNetSavings,
   computeReferencePrice,
   DISPLAY_SIMPLIFY_TOLERANCE_DEG,
@@ -8,22 +9,32 @@ import {
   computeStationDetail,
   costPerKm,
   createRouteProjector,
+  distanceKm,
   estimateProxyDetour,
+  NEARBY_PROXY_SPEED_KMH,
+  pointToWkt,
   resolveDetour,
   routeToWkt,
   selectStationPrice,
   simplifyRoute,
   type Detour,
+  type NationalPrice,
   type PriceSample,
+  type ReferencePrice,
+  type RouteProjection,
   type SelectedPrice,
   type StationPriceOption,
 } from "@tappafurba/core";
 import type {
   DetourSource,
+  NearbyRequest,
+  NearbyResponse,
   RefinementInfo,
+  SearchOptions,
   SearchRefinementResponse,
   SearchRequest,
   SearchResponse,
+  SearchResponseBase,
   StationDetailResponse,
   StationPriceEntry,
   StationRouteResponse,
@@ -34,6 +45,7 @@ import type {
 import { AppError, BudgetExhaustedError } from "../errors";
 import type { BudgetGate } from "../providers/routing/DirectionsBudget";
 import type { RouteOptions, RouteResult, RoutingProvider } from "../providers/routing/RoutingProvider";
+import { MAX_NEARBY_RADIUS_KM, MIN_NEARBY_RADIUS_KM } from "./schemas";
 import type { CorridorPriceRow, StationRepository } from "./StationRepository";
 import type { SearchSession, SearchSessionStore } from "./SearchSessionStore";
 
@@ -72,8 +84,33 @@ interface Candidate {
 }
 
 interface ScoringContext {
-  request: SearchRequest;
+  request: SearchOptions;
   referencePrice: number;
+}
+
+/**
+ * Ciò che distingue le due modalità: dove cercare e come misurare le stazioni. «In viaggio» cerca lungo un tracciato
+ * (distanza laterale e posizione lungo il percorso); «Intorno a me» attorno a un punto (distanza in linea d'aria).
+ */
+interface SearchArea {
+  /** Tracciato (LINESTRING) o punto (POINT) in WKT, per `ST_DWithin`. */
+  wkt: string;
+  radiusKm: number;
+  /** Punti che coprono l'area per l'aggiornamento in tempo reale: il tracciato semplificato, o il solo punto. */
+  livePricesPath: readonly Coordinate[];
+  project(point: Coordinate): RouteProjection;
+  /** Stima della fase 1 del giro per una stazione a questa distanza laterale (km uguali nelle due modalità, minuti no). */
+  proxyDetour(lateralDistanceKm: number): Detour;
+  /** Km extra massimi del giro (`Infinity` in «Intorno a me»: lì conta solo il raggio). */
+  detourLimitKm: number;
+  referencePrice(samples: readonly PriceSample[], national: NationalPrice | null): ReferencePrice | null;
+}
+
+interface SearchOutcome {
+  candidatesEvaluated: number;
+  lastIngestionAt: Date | null;
+  livePrices: LivePricesInfo;
+  staleCount: number;
 }
 
 export class SearchService {
@@ -84,7 +121,7 @@ export class SearchService {
   }
 
   /**
-   * Fase 1 (sincrona): percorso A→B, corridoio PostGIS, prezzo di riferimento,
+   * «In viaggio». Fase 1 (sincrona): percorso A→B, corridoio PostGIS, prezzo di riferimento,
    * ranking con deviazione stimata (proxy geometrico). Risponde subito.
    * Fase 2 (in background): verifica con routing reale delle prime
    * REFINE_TOP_N stazioni (e di quelle che le sostituiscono in testa, entro REFINE_EXTRA_CALLS_CAP chiamate extra);
@@ -97,46 +134,99 @@ export class SearchService {
     }
 
     const simplified = simplifyRoute(route.geometry);
-    const radiusKm = clamp(request.maxDetourKm, MIN_CORRIDOR_RADIUS_KM, MAX_CORRIDOR_RADIUS_KM);
+    const project = createRouteProjector(simplified);
+    const routeMetrics = { distanceKm: route.distanceKm, durationMinutes: route.durationMinutes };
 
-    // Prima dei dati: aggiorna in tempo reale i riquadri del corridoio (non fallisce mai, degrada al file giornaliero).
-    const livePrices = this.deps.livePrices ? await this.deps.livePrices.ensureFresh(simplified, radiusKm) : LIVE_PRICES_DISABLED;
+    const base = await this.runSearch(
+      {
+        wkt: routeToWkt(simplified),
+        radiusKm: clamp(request.maxDetourKm, MIN_CORRIDOR_RADIUS_KM, MAX_CORRIDOR_RADIUS_KM),
+        livePricesPath: simplified,
+        project: ([lon, lat]) => project([lon, lat]),
+        proxyDetour: (lateralDistanceKm) => estimateProxyDetour(lateralDistanceKm),
+        detourLimitKm: request.maxDetourKm,
+        referencePrice: computeReferencePrice,
+      },
+      request,
+      { mode: "route", origin: request.origin, destination: request.destination, route: routeMetrics },
+    );
+
+    return {
+      ...base,
+      route: {
+        distanceKm: round(route.distanceKm, 1),
+        durationMinutes: round(route.durationMinutes, 0),
+        // Al client va il tracciato fine (~1 m), non quello semplificato a ~50 m che serve solo ai calcoli sul corridoio.
+        geometry: simplifyRoute(route.geometry, DISPLAY_SIMPLIFY_TOLERANCE_DEG).map(([lon, lat]) => [round(lon, 5), round(lat, 5)] as [number, number]),
+      },
+    };
+  }
+
+  /**
+   * «Intorno a me»: stesse due fasi di `search`, ma attorno a un punto invece che lungo un tracciato. Nessuna chiamata di
+   * routing in fase 1 (non c'è un percorso A→B); la fase 2 verifica con il routing reale il giro completo
+   * origine→stazione→origine delle prime stazioni. Il raggio è la distanza in linea d'aria dal punto, non un limite ai km extra.
+   */
+  async searchNearby(request: NearbyRequest): Promise<NearbyResponse> {
+    const origin: Coordinate = [request.origin.lon, request.origin.lat];
+    const radiusKm = clamp(request.radiusKm, MIN_NEARBY_RADIUS_KM, MAX_NEARBY_RADIUS_KM);
+
+    const base = await this.runSearch(
+      {
+        wkt: pointToWkt(origin),
+        radiusKm,
+        livePricesPath: [origin],
+        project: (point) => ({ lateralDistanceKm: distanceKm(origin, point), alongRouteKm: 0 }),
+        // Giro breve da porta a porta: velocità media molto più bassa di quella del corridoio (vedi NEARBY_PROXY_SPEED_KMH).
+        proxyDetour: (lateralDistanceKm) => estimateProxyDetour(lateralDistanceKm, { speedKmh: NEARBY_PROXY_SPEED_KMH }),
+        detourLimitKm: Number.POSITIVE_INFINITY,
+        referencePrice: computeAreaReferencePrice,
+      },
+      request,
+      { mode: "nearby", origin: request.origin, destination: request.origin, route: { distanceKm: 0, durationMinutes: 0 } },
+    );
+
+    return { ...base, nearby: { origin: request.origin, radiusKm } };
+  }
+
+  /** Parte comune alle due modalità: dati del corridoio (o dell'area), candidati, prezzo di riferimento, classifica, sessione. */
+  private async runSearch(
+    area: SearchArea,
+    options: SearchOptions,
+    base: Pick<SearchSession, "mode" | "origin" | "destination" | "route">,
+  ): Promise<SearchResponseBase> {
+    // Prima dei dati: aggiorna in tempo reale i riquadri dell'area (non fallisce mai, degrada al file giornaliero).
+    const livePrices = this.deps.livePrices ? await this.deps.livePrices.ensureFresh(area.livePricesPath, area.radiusKm) : LIVE_PRICES_DISABLED;
 
     const corridor = {
-      routeWkt: routeToWkt(simplified),
-      radiusMeters: radiusKm * 1000,
-      fuelType: request.fuelType,
-      maxAgeHours: request.maxPriceAgeHours,
+      routeWkt: area.wkt,
+      radiusMeters: area.radiusKm * 1000,
+      fuelType: options.fuelType,
+      maxAgeHours: options.maxPriceAgeHours,
     };
     const [rows, national, lastIngestionAt, staleRows] = await Promise.all([
-      this.deps.repository.findCorridorPrices({
-        routeWkt: routeToWkt(simplified),
-        radiusMeters: radiusKm * 1000,
-        fuelType: request.fuelType,
-        maxAgeHours: request.maxPriceAgeHours,
-      }),
+      this.deps.repository.findCorridorPrices({ ...corridor }),
       this.deps.repository.getNationalPrice({
-        fuelType: request.fuelType,
-        onlySelf: request.onlySelf,
-        maxAgeHours: request.maxPriceAgeHours,
+        fuelType: options.fuelType,
+        onlySelf: options.onlySelf,
+        maxAgeHours: options.maxPriceAgeHours,
       }),
       this.deps.repository.getLastIngestionAt(),
-      this.deps.repository.findStaleStations({ ...corridor, onlySelf: request.onlySelf }),
+      this.deps.repository.findStaleStations({ ...corridor, onlySelf: options.onlySelf }),
     ]);
 
-    const project = createRouteProjector(simplified);
     const candidates: Candidate[] = [];
-    for (const { summary, options } of groupByStation(rows)) {
-      const price = selectStationPrice(options, { onlySelf: request.onlySelf });
+    for (const { summary, options: priceOptions } of groupByStation(rows)) {
+      const price = selectStationPrice(priceOptions, { onlySelf: options.onlySelf });
       if (!price) continue;
-      const { lateralDistanceKm, alongRouteKm } = project([summary.lon, summary.lat]);
+      const { lateralDistanceKm, alongRouteKm } = area.project([summary.lon, summary.lat]);
       candidates.push({ station: summary, price, lateralDistanceKm, alongRouteKm });
     }
 
     // Stazioni scartate SOLO per l'età del prezzo che, per la stima geometrica, starebbero entro la deviazione massima.
     const staleCount = staleRows.filter((stale) => {
-      const { lateralDistanceKm } = project([stale.lon, stale.lat]);
-      return estimateProxyDetour(lateralDistanceKm).km <= request.maxDetourKm;
+      const { lateralDistanceKm } = area.project([stale.lon, stale.lat]);
+      return area.proxyDetour(lateralDistanceKm).km <= area.detourLimitKm;
     }).length;
 
     const samples: PriceSample[] = candidates.map((c) => ({
@@ -145,9 +235,9 @@ export class SearchService {
     }));
     // Prezzo di riferimento impostato dall'utente: sostituisce del tutto la cascata automatica (nessun blending).
     const reference =
-      request.referencePriceOverride !== undefined
-        ? { value: request.referencePriceOverride, level: "manual" as const, sampleSize: 0 }
-        : computeReferencePrice(samples, national);
+      options.referencePriceOverride !== undefined
+        ? { value: options.referencePriceOverride, level: "manual" as const, sampleSize: 0 }
+        : area.referencePrice(samples, national);
     if (!reference) {
       throw new AppError(
         "NO_PRICE_DATA",
@@ -156,52 +246,37 @@ export class SearchService {
       );
     }
 
-    const context: ScoringContext = { request, referencePrice: reference.value };
+    const context: ScoringContext = { request: options, referencePrice: reference.value };
     const scored: StationResult[] = [];
     for (const candidate of candidates) {
-      const detour = estimateProxyDetour(candidate.lateralDistanceKm);
-      if (detour.km > request.maxDetourKm) continue;
+      const detour = area.proxyDetour(candidate.lateralDistanceKm);
+      if (detour.km > area.detourLimitKm) continue;
       scored.push(scoreCandidate(candidate, detour, "proxy", context));
     }
     scored.sort(byNetSavings);
 
     const budget = await this.deps.budget.status();
     const results = scored.slice(0, RESULT_LIMIT);
-    const routeMetrics = { distanceKm: route.distanceKm, durationMinutes: route.durationMinutes };
 
     const session: SearchSession = {
       id: randomUUID(),
-      request,
-      route: routeMetrics,
+      ...base,
+      request: options,
+      detourLimitKm: area.detourLimitKm,
       referencePrice: { value: reference.value, level: reference.level, sampleSize: reference.sampleSize },
-      costPerKm: costPerKm(reference.value, request.consumptionKmPerLiter),
+      costPerKm: costPerKm(reference.value, options.consumptionKmPerLiter),
       results,
       refinement: initialRefinement(budget, results.length),
       createdAt: this.now(),
     };
     this.deps.sessions.set(session);
 
+    // La risposta si compone PRIMA di avviare il ricalcolo: fotografa lo stato «pending» e l'elenco con le stime.
+    const response = presentBase(session, { candidatesEvaluated: candidates.length, lastIngestionAt, livePrices, staleCount });
     if (session.refinement.status === "pending") {
       session.refinementPromise = this.refine(session);
     }
-
-    return {
-      searchId: session.id,
-      route: {
-        distanceKm: round(route.distanceKm, 1),
-        durationMinutes: round(route.durationMinutes, 0),
-        // Al client va il tracciato fine (~1 m), non quello semplificato a ~50 m che serve solo ai calcoli sul corridoio.
-        geometry: simplifyRoute(route.geometry, DISPLAY_SIMPLIFY_TOLERANCE_DEG).map(([lon, lat]) => [round(lon, 5), round(lat, 5)] as [number, number]),
-      },
-      referencePrice: { ...session.referencePrice, value: round(session.referencePrice.value, 3) },
-      costPerKm: round(session.costPerKm, 4),
-      results: results.map(present),
-      candidatesEvaluated: candidates.length,
-      pricesUpdatedAt: lastIngestionAt ? lastIngestionAt.toISOString() : null,
-      livePrices,
-      refinement: session.refinement,
-      staleStations: { count: staleCount, maxAgeHours: request.maxPriceAgeHours },
-    };
+    return response;
   }
 
   getRefinement(searchId: string): SearchRefinementResponse | null {
@@ -220,10 +295,10 @@ export class SearchService {
 
   /** Routing A→stazione→B e deviazione coerente rispetto al diretto. Una nuova richiesta Directions (nessuna cache dei risultati, vedi InFlightRoutingProvider). */
   private async routeViaStation(session: SearchSession, result: StationResult): Promise<{ via: RouteResult; detour: Detour }> {
-    const { request, route } = session;
+    const { request, route, origin, destination } = session;
     const via = await this.deps.routing.getRoute(
-      [request.origin, { lon: result.station.lon, lat: result.station.lat }, request.destination],
-      routeOptions(request),
+      [origin, { lon: result.station.lon, lat: result.station.lat }, destination],
+      viaRouteOptions(session),
     );
     if (!via) throw new AppError("NO_ROUTE", 422, "Nessun percorso stradale trovato passando da questa stazione.");
     return { via, detour: computeRoutedDetour(route, via, result.lateralDistanceKm) };
@@ -284,6 +359,7 @@ export class SearchService {
 
     return {
       searchId,
+      mode: session.mode,
       station: result.station,
       selected: {
         fuelType: request.fuelType,
@@ -321,7 +397,7 @@ export class SearchService {
    */
   private async refine(session: SearchSession): Promise<void> {
     try {
-      const { request, route } = session;
+      const { request, route, origin, destination } = session;
       const context: ScoringContext = { request, referencePrice: session.referencePrice.value };
 
       const attempted = new Set<number>(); // verificate o non verificabili: non si riprovano
@@ -343,8 +419,8 @@ export class SearchService {
             attempted.add(result.station.id);
             try {
               const via = await this.deps.routing.getRoute(
-                [request.origin, { lon: result.station.lon, lat: result.station.lat }, request.destination],
-                routeOptions(request),
+                [origin, { lon: result.station.lon, lat: result.station.lat }, destination],
+                viaRouteOptions(session),
               );
               if (!via) {
                 failures += 1;
@@ -368,7 +444,7 @@ export class SearchService {
           if (!detour) continue;
           verified += 1;
           // Con i dati reali la deviazione massima resta il criterio finale di esclusione.
-          replacements.set(result.station.id, detour.km > request.maxDetourKm ? null : rescore(result, detour, context));
+          replacements.set(result.station.id, detour.km > session.detourLimitKm ? null : rescore(result, detour, context));
         }
 
         session.results = session.results
@@ -386,6 +462,21 @@ export class SearchService {
       session.refinement = { status: "failed", reason: "routing_error" };
     }
   }
+}
+
+/** Campi della risposta comuni alle due modalità, ricavati dalla sessione appena creata. */
+function presentBase(session: SearchSession, outcome: SearchOutcome): SearchResponseBase {
+  return {
+    searchId: session.id,
+    referencePrice: { ...session.referencePrice, value: round(session.referencePrice.value, 3) },
+    costPerKm: round(session.costPerKm, 4),
+    results: session.results.map(present),
+    candidatesEvaluated: outcome.candidatesEvaluated,
+    pricesUpdatedAt: outcome.lastIngestionAt ? outcome.lastIngestionAt.toISOString() : null,
+    livePrices: outcome.livePrices,
+    refinement: session.refinement,
+    staleStations: { count: outcome.staleCount, maxAgeHours: session.request.maxPriceAgeHours },
+  };
 }
 
 function initialRefinement(budget: "ok" | "soft_limit" | "hard_limit", resultCount: number): RefinementInfo {
@@ -505,8 +596,18 @@ function sortPrices(prices: readonly StationPriceEntry[]): StationPriceEntry[] {
 }
 
 /** «Evita autostrada»: lo stesso tipo di percorso per il diretto e per le verifiche, così la deviazione è confrontabile. */
-function routeOptions(request: SearchRequest): RouteOptions {
+function routeOptions(request: SearchOptions): RouteOptions {
   return { avoidMotorway: request.avoidMotorway, avoidTolls: request.avoidTolls, avoidFerries: request.avoidFerries };
+}
+
+/**
+ * Opzioni delle richieste «via stazione». In «Intorno a me» il giro è andata e ritorno dallo stesso punto: alla stazione si
+ * può invertire la marcia (come fa un navigatore e come mostra Google Maps); senza, Directions ci fa girare attorno a un
+ * isolato e il giro risulta più lungo di quello vero. In «In viaggio» resta il comportamento predefinito.
+ */
+function viaRouteOptions(session: SearchSession): RouteOptions {
+  const options = routeOptions(session.request);
+  return session.mode === "nearby" ? { ...options, continueStraight: false } : options;
 }
 
 function clamp(value: number, min: number, max: number): number {

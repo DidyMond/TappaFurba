@@ -1,4 +1,4 @@
-import { routeToWkt } from "@tappafurba/core";
+import { pointToWkt, routeToWkt } from "@tappafurba/core";
 import { Kysely, PostgresDialect } from "kysely";
 import pg from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -89,6 +89,14 @@ describe.skipIf(!enabled)("integrazione PostgreSQL + PostGIS", () => {
     it("rispetta il raggio: a ~5.56 km compare con raggio 6 km ma non con 5 km", async () => {
       const inside = await repository.findCorridorPrices({ routeWkt: lineFiveKmAway, radiusMeters: 6000, fuelType: "benzina", maxAgeHours: 72 });
       const outside = await repository.findCorridorPrices({ routeWkt: lineFiveKmAway, radiusMeters: 5000, fuelType: "benzina", maxAgeHours: 72 });
+      expect(inside.some((r) => r.stationId === TEST_STATION_ID)).toBe(true);
+      expect(outside.some((r) => r.stationId === TEST_STATION_ID)).toBe(false);
+    });
+
+    it("INTORNO A ME — un POINT WKT cerca in un cerchio: la stazione a ~5.56 km compare con raggio 6 km ma non con 5 km", async () => {
+      const point = pointToWkt([3.0, 42.05]);
+      const inside = await repository.findCorridorPrices({ routeWkt: point, radiusMeters: 6000, fuelType: "benzina", maxAgeHours: 72 });
+      const outside = await repository.findCorridorPrices({ routeWkt: point, radiusMeters: 5000, fuelType: "benzina", maxAgeHours: 72 });
       expect(inside.some((r) => r.stationId === TEST_STATION_ID)).toBe(true);
       expect(outside.some((r) => r.stationId === TEST_STATION_ID)).toBe(false);
     });

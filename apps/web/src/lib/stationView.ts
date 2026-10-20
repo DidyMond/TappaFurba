@@ -83,15 +83,17 @@ export function fuelLabel(fuelType: SearchFuelType): string {
   return FUEL_LABEL[fuelType];
 }
 
-/** Come è stato ricavato il prezzo di riferimento (P_avg), per le didascalie. */
-export function referenceLevelText(level: ReferencePriceLevel, sampleSize: number): string {
+/** Come è stato ricavato il prezzo di riferimento (P_avg), per le didascalie. `nearby`: ricerca «Intorno a me», senza percorso. */
+export function referenceLevelText(level: ReferencePriceLevel, sampleSize: number, nearby = false): string {
   switch (level) {
     case "on_route":
       return `prezzo tipico di ${sampleSize} stazioni sul percorso`;
     case "corridor":
       return `prezzo tipico di ${sampleSize} stazioni vicine al percorso`;
+    case "area":
+      return `prezzo tipico di ${sampleSize} stazioni nel raggio di ricerca`;
     case "national":
-      return "prezzo tipico nazionale, poche stazioni sul tratto";
+      return nearby ? "prezzo tipico nazionale, poche stazioni in zona" : "prezzo tipico nazionale, poche stazioni sul tratto";
     case "manual":
       return "impostato da te nelle Impostazioni";
   }

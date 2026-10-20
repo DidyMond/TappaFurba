@@ -1,4 +1,4 @@
-import type { SearchRequest, SearchResponse, StationDetailResponse, StationResult } from "@tappafurba/shared";
+import type { NearbyRequest, NearbyResponse, SearchRequest, SearchResponse, StationDetailResponse, StationResult } from "@tappafurba/shared";
 
 let nextId = 100;
 
@@ -44,6 +44,21 @@ export const REQUEST: SearchRequest = {
   fuelType: "benzina",
   liters: 45,
   maxDetourKm: 5,
+  consumptionKmPerLiter: 15,
+  valueOfTimePerMinute: 0.15,
+  onlySelf: false,
+  maxPriceAgeHours: 72,
+  avoidMotorway: false,
+  avoidTolls: false,
+  avoidFerries: false,
+};
+
+/** «Intorno a me»: stesso veicolo e stessi parametri di REQUEST, un solo punto e un raggio. */
+export const NEARBY_REQUEST: NearbyRequest = {
+  origin: { lon: 9.204, lat: 45.4864 },
+  radiusKm: 5,
+  fuelType: "benzina",
+  liters: 45,
   consumptionKmPerLiter: 15,
   valueOfTimePerMinute: 0.15,
   onlySelf: false,
@@ -130,10 +145,22 @@ export function makeResponse(overrides: Partial<SearchResponse> = {}): SearchRes
   };
 }
 
+/** Risposta di «Intorno a me»: come `makeResponse` ma senza percorso, con il punto di partenza e il raggio. */
+export function makeNearbyResponse(overrides: Partial<NearbyResponse> = {}): NearbyResponse {
+  const { route: _route, ...base } = makeResponse();
+  return {
+    ...base,
+    referencePrice: { value: 2.15, level: "area", sampleSize: 12 },
+    nearby: { origin: { lon: 9.204, lat: 45.4864 }, radiusKm: 5 },
+    ...overrides,
+  };
+}
+
 /** Dettaglio stazione (Screen 3) con valori sensati: stazione verificata, Benzina Self scelta, listino con Servito e Diesel. */
 export function makeDetail(overrides: Partial<StationDetailResponse> = {}): StationDetailResponse {
   return {
     searchId: "s1",
+    mode: "route",
     station: {
       id: 2,
       nomeImpianto: "1858 BREGNANO",

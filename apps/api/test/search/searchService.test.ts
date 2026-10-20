@@ -1,5 +1,5 @@
-import { tileForPoint } from "@tappafurba/core";
-import type { SearchRequest, StationPriceEntry } from "@tappafurba/shared";
+import { NEARBY_PROXY_SPEED_KMH, PROXY_CIRCUITY_FACTOR, PROXY_DETOUR_SPEED_KMH, tileForPoint } from "@tappafurba/core";
+import type { NearbyRequest, SearchRequest, StationPriceEntry } from "@tappafurba/shared";
 import { describe, expect, it } from "vitest";
 import { AppError, BudgetExhaustedError, ProviderError } from "../../src/errors";
 import type { BudgetGate, BudgetStatus } from "../../src/providers/routing/DirectionsBudget";
@@ -576,7 +576,11 @@ describe("SearchService — ricalcolo in background con routing reale (top-N)", 
 describe("SearchSessionStore", () => {
   const session = (id: string, createdAt: number): SearchSession => ({
     id,
+    mode: "route",
     request,
+    origin: ORIGIN,
+    destination: DESTINATION,
+    detourLimitKm: request.maxDetourKm,
     route: { distanceKm: 1, durationMinutes: 1 },
     referencePrice: { value: 1, level: "on_route", sampleSize: 3 },
     costPerKm: 0.1,
@@ -1172,5 +1176,348 @@ describe("SearchService — prezzo di riferimento manuale (referencePriceOverrid
     expect(detail.referencePrice.level).toBe("manual");
     expect(detail.impact.priceDifferencePerLiter).toBeCloseTo(1.7 - 2.5, 3);
     expect(detail.impact.priceDifferencePercent).toBeCloseTo(((1.7 - 2.5) / 2.5) * 100, 1);
+  });
+});
+
+/**
+ * «Intorno a me»: scenario attorno a ORIGIN (9,0 / 45,0). 0,01° di latitudine ≈ 1,11 km in linea d'aria, quindi le
+ * stazioni sono a ~1,1 / 2,2 / 3,3 / 3,9 km (nel raggio di 5 km) e una a ~6,7 km (fuori).
+ */
+describe("SearchService.searchNearby — «Intorno a me»", () => {
+  const nearbyRequest: NearbyRequest = {
+    origin: ORIGIN,
+    radiusKm: 5,
+    fuelType: "benzina",
+    liters: 45,
+    consumptionKmPerLiter: 15,
+    valueOfTimePerMinute: 0.15,
+    onlySelf: true,
+    maxPriceAgeHours: 72,
+    avoidMotorway: false,
+    avoidTolls: false,
+    avoidFerries: false,
+  };
+
+  const around = () => [
+    row({ stationId: 11, lon: 9.0, lat: 45.01, price: 1.8 }), // ~1,1 km
+    row({ stationId: 12, lon: 9.0, lat: 45.02, price: 1.82 }), // ~2,2 km
+    row({ stationId: 13, lon: 9.0, lat: 45.03, price: 1.84 }), // ~3,3 km
+    row({ stationId: 14, lon: 9.0, lat: 45.035, price: 1.7 }), // ~3,9 km, la più economica
+    row({ stationId: 15, lon: 9.0, lat: 45.06, price: 1.5 }), // ~6,7 km: fuori dal raggio
+  ];
+
+  it("cerca attorno al punto con un POINT WKT e il raggio in metri, senza chiamare il routing in fase 1", async () => {
+    const { service, repository, routing } = buildService(around());
+    const response = await service.searchNearby(nearbyRequest);
+
+    expect(repository.lastQuery?.routeWkt).toBe("POINT(9.000000 45.000000)");
+    expect(repository.lastQuery?.radiusMeters).toBe(5000);
+    expect(response.nearby).toEqual({ origin: ORIGIN, radiusKm: 5 });
+    expect("route" in response).toBe(false);
+    // Nessun percorso A→B: la risposta è immediata e il routing parte solo con la verifica in background.
+    expect(response.refinement.status).toBe("pending");
+    expect((routing as MockRoutingProvider).calls.filter((c) => c.length === 2)).toHaveLength(0);
+  });
+
+  it("esclude le stazioni oltre il raggio e non applica alcun limite ai km extra del giro", async () => {
+    const { service } = buildService(around());
+    const { results, candidatesEvaluated } = await service.searchNearby(nearbyRequest);
+
+    expect(candidatesEvaluated).toBe(4);
+    expect(results.map((r) => r.station.id).sort()).toEqual([11, 12, 13, 14]);
+    // La stazione a ~3,9 km ha un giro stimato di ~9,7 km: «In viaggio» con 5 km di deviazione la scarterebbe, qui il raggio decide.
+    const far = results.find((r) => r.station.id === 14)!;
+    expect(far.detourKm).toBeGreaterThan(5);
+  });
+
+  it("il prezzo di riferimento è la mediana delle stazioni nel raggio (livello «area»), non quello delle più vicine", async () => {
+    const { service } = buildService(around());
+    const { referencePrice } = await service.searchNearby(nearbyRequest);
+    // 1,70 / 1,80 / 1,82 / 1,84 → mediana 1,81. Con il livello «sul percorso» sarebbe stata la mediana delle sole stazioni entro 500 m (nessuna).
+    expect(referencePrice).toEqual({ value: 1.81, level: "area", sampleSize: 4 });
+  });
+
+  it("misura distanza in linea d'aria e giro stimato (2 × distanza × 1,25), senza posizione lungo un percorso", async () => {
+    const { service } = buildService(around());
+    const { results } = await service.searchNearby(nearbyRequest);
+    const first = results.find((r) => r.station.id === 11)!;
+
+    expect(first.lateralDistanceKm).toBeCloseTo(1.11, 1);
+    expect(first.alongRouteKm).toBe(0);
+    expect(first.detourSource).toBe("proxy");
+    expect(first.detourKm).toBeCloseTo(2 * 1.11 * 1.25, 1);
+  });
+
+  it("classifica per risparmio netto sul pieno: (riferimento − prezzo) × litri − costo del giro", async () => {
+    const { service } = buildService(around());
+    const { results } = await service.searchNearby(nearbyRequest);
+
+    for (let i = 1; i < results.length; i++) {
+      expect(results[i - 1]!.netSavings).toBeGreaterThanOrEqual(results[i]!.netSavings);
+    }
+    const best = results[0]!;
+    expect(best.station.id).toBe(14);
+    expect(best.grossSavings).toBeCloseTo((1.81 - 1.7) * 45, 2);
+    expect(best.netSavings).toBeCloseTo(best.grossSavings - best.detourCost, 1);
+  });
+
+  it("la verifica in background misura il giro origine → stazione → origine con il routing reale", async () => {
+    const { service, routing } = buildService(around());
+    const { searchId } = await service.searchNearby(nearbyRequest);
+    await service.waitForRefinement(searchId);
+
+    const calls = (routing as MockRoutingProvider).calls;
+    expect(calls.length).toBeGreaterThan(0);
+    for (const waypoints of calls) {
+      expect(waypoints).toHaveLength(3);
+      expect(waypoints[0]).toEqual(ORIGIN);
+      expect(waypoints[2]).toEqual(ORIGIN);
+    }
+    const refined = service.getRefinement(searchId)!;
+    expect(refined.refinement.status).toBe("done");
+    for (const result of refined.results.filter((r) => r.detourSource === "routing")) {
+      // Il giro reale non può essere più corto di andata e ritorno in linea retta.
+      expect(result.detourKm).toBeGreaterThanOrEqual(2 * result.lateralDistanceKm - 0.01);
+    }
+  });
+
+  it("senza budget (limite raggiunto) la classifica resta sulle stime e il routing non viene chiamato", async () => {
+    const { service, routing } = buildService(around(), { budget: "hard_limit" });
+    const response = await service.searchNearby(nearbyRequest);
+
+    expect(response.refinement).toEqual({ status: "skipped", reason: "budget_hard_limit" });
+    expect((routing as MockRoutingProvider).calls).toHaveLength(0);
+    expect(response.results.every((r) => r.detourSource === "proxy")).toBe(true);
+  });
+
+  it("con meno di 3 stazioni nel raggio ripiega sul prezzo nazionale", async () => {
+    const { service } = buildService(around().slice(0, 2), { national: { median: 1.9, sampleSize: 20000 } });
+    const { referencePrice } = await service.searchNearby(nearbyRequest);
+    expect(referencePrice).toEqual({ value: 1.9, level: "national", sampleSize: 20000 });
+  });
+
+  it("422 NO_PRICE_DATA se non ci sono né stazioni in zona né dato nazionale", async () => {
+    const { service } = buildService([]);
+    await expect(service.searchNearby(nearbyRequest)).rejects.toMatchObject({ code: "NO_PRICE_DATA", httpStatus: 422 });
+  });
+
+  it("il prezzo di riferimento manuale sostituisce la cascata", async () => {
+    const { service } = buildService(around());
+    const { referencePrice } = await service.searchNearby({ ...nearbyRequest, referencePriceOverride: 2.0 });
+    expect(referencePrice).toEqual({ value: 2.0, level: "manual", sampleSize: 0 });
+  });
+
+  it("tiene il raggio tra 1 e 10 km anche se il chiamante ne passa uno diverso", async () => {
+    const wide = buildService(around());
+    expect((await wide.service.searchNearby({ ...nearbyRequest, radiusKm: 50 })).nearby.radiusKm).toBe(10);
+    expect(wide.repository.lastQuery?.radiusMeters).toBe(10_000);
+
+    const narrow = buildService(around(), { national: { median: 1.9, sampleSize: 20000 } });
+    expect((await narrow.service.searchNearby({ ...nearbyRequest, radiusKm: 0.2 })).nearby.radiusKm).toBe(1);
+    expect(narrow.repository.lastQuery?.radiusMeters).toBe(1000);
+  });
+
+  it("le stazioni con prezzo non aggiornato sono conteggiate a parte, come in «In viaggio»", async () => {
+    const stale = [{ stationId: 99, lon: 9.0, lat: 45.015 }];
+    const repository = new InMemoryStationRepository(around(), null, undefined, undefined, stale);
+    const service = new SearchService({ routing: new MockRoutingProvider(), repository, budget: { status: async () => "ok" }, sessions: new SearchSessionStore() });
+    const response = await service.searchNearby(nearbyRequest);
+    expect(response.staleStations).toEqual({ count: 1, maxAgeHours: 72 });
+  });
+
+  describe("dettaglio e percorso della stazione", () => {
+    it("il dettaglio dice «nearby», conta il giro completo e non ha una posizione sul percorso", async () => {
+      const { service } = buildService(around(), { stationPrices: { 14: [{ fuelType: "benzina", isSelf: true, price: 1.7, communicatedAt: "2026-09-27T10:00:00.000Z" }] } });
+      const { searchId } = await service.searchNearby(nearbyRequest);
+      await service.waitForRefinement(searchId);
+
+      const detail = await service.getStationDetail(searchId, 14);
+      expect(detail.mode).toBe("nearby");
+      expect(detail.alongRouteKm).toBe(0);
+      expect(detail.lateralDistanceKm).toBeCloseTo(3.89, 1);
+      expect(detail.detour.source).toBe("routing");
+      expect(detail.detour.km).toBeGreaterThanOrEqual(2 * detail.lateralDistanceKm - 0.01);
+      expect(detail.impact.grossSavings).toBeCloseTo((1.81 - 1.7) * 45, 2);
+    });
+
+    it("il percorso della stazione parte e torna al punto di partenza", async () => {
+      const { service } = buildService(around());
+      const { searchId } = await service.searchNearby(nearbyRequest);
+      await service.waitForRefinement(searchId);
+
+      const route = await service.getStationRoute(searchId, 11);
+      expect(route.geometry[0]).toEqual([9, 45]);
+      expect(route.geometry[route.geometry.length - 1]).toEqual([9, 45]);
+      expect(route.detourKm).toBeGreaterThan(0);
+    });
+
+    it("«In viaggio» continua a dichiarare mode «route» nel dettaglio", async () => {
+      const { service } = buildService(onRoute());
+      const { searchId } = await service.search(request);
+      expect((await service.getStationDetail(searchId, 1)).mode).toBe("route");
+    });
+  });
+});
+
+describe("SearchService — inversione di marcia alla stazione", () => {
+  const nearbyRequest: NearbyRequest = {
+    origin: ORIGIN,
+    radiusKm: 5,
+    fuelType: "benzina",
+    liters: 45,
+    consumptionKmPerLiter: 15,
+    valueOfTimePerMinute: 0.15,
+    onlySelf: true,
+    maxPriceAgeHours: 72,
+    avoidMotorway: false,
+    avoidTolls: false,
+    avoidFerries: false,
+  };
+  const around = () => [
+    row({ stationId: 31, lon: 9.0, lat: 45.01, price: 1.8 }),
+    row({ stationId: 32, lon: 9.0, lat: 45.02, price: 1.82 }),
+    row({ stationId: 33, lon: 9.0, lat: 45.03, price: 1.84 }),
+  ];
+
+  it("«Intorno a me»: le verifiche in background, il dettaglio e il percorso della stazione ammettono l'inversione (giro andata e ritorno)", async () => {
+    const { service, routing } = buildService(around());
+    const { searchId } = await service.searchNearby(nearbyRequest);
+    await service.waitForRefinement(searchId);
+    const mock = routing as MockRoutingProvider;
+    expect(mock.calls.length).toBeGreaterThan(0);
+    expect(mock.callOptions.every((o) => o.continueStraight === false)).toBe(true);
+
+    const before = mock.calls.length;
+    await service.getStationDetail(searchId, 33); // stazione non ancora verificata o già verificata: se chiama il routing, con inversione
+    await service.getStationRoute(searchId, 31);
+    expect(mock.calls.length).toBeGreaterThan(before); // il percorso della stazione chiama sempre il routing
+    expect(mock.callOptions.every((o) => o.continueStraight === false)).toBe(true);
+  });
+
+  it("«In viaggio» non cambia: nessuna richiesta chiede l'inversione (il passaggio dalla stazione prosegue verso B)", async () => {
+    const { service, routing } = buildService();
+    const { searchId } = await service.search(request);
+    await service.waitForRefinement(searchId);
+    await service.getStationRoute(searchId, 1);
+    const mock = routing as MockRoutingProvider;
+    expect(mock.calls.length).toBeGreaterThan(0);
+    expect(mock.callOptions.some((o) => o.continueStraight !== undefined)).toBe(false);
+  });
+});
+
+/**
+ * Il proxy del giro di «Intorno a me» è un fattore unico fisso (2 × distanza × PROXY_CIRCUITY_FACTOR): non deriva da nessun
+ * percorso, quindi non può ereditarne la tortuosità. Questi test provano la sola stima della fase 1: girano con il budget al
+ * limite, quindi la verifica col routing non parte. Dopo la verifica in background il giro è quello reale del provider e la
+ * classifica può cambiare: è voluto (vedi i test su `searchNearby` che seguono la verifica).
+ */
+describe("SearchService.searchNearby — il proxy del giro è un fattore unico, indipendente da qualsiasi percorso", () => {
+  const nearbyRequest: NearbyRequest = {
+    origin: ORIGIN,
+    radiusKm: 5,
+    fuelType: "benzina",
+    liters: 45,
+    consumptionKmPerLiter: 15,
+    valueOfTimePerMinute: 0.15,
+    onlySelf: true,
+    maxPriceAgeHours: 72,
+    avoidMotorway: false,
+    avoidTolls: false,
+    avoidFerries: false,
+  };
+  // Stazioni a ~1,1 / ~2,2 / ~3,3 km e una al limite del raggio (~4,99 km).
+  const stations = () => [
+    row({ stationId: 41, lon: 9.0, lat: 45.01, price: 1.8 }),
+    row({ stationId: 42, lon: 9.0, lat: 45.02, price: 1.82 }),
+    row({ stationId: 43, lon: 9.0, lat: 45.03, price: 1.84 }),
+    row({ stationId: 44, lon: 9.0, lat: 45.0449, price: 1.7 }),
+  ];
+  const proxyOnly = (routing: MockRoutingProvider) => buildService(stations(), { routing, budget: "hard_limit" }).service.searchNearby(nearbyRequest);
+
+  it("al limite del raggio (5 km) il giro stimato è ~12,5 km: 2 × distanza × 1,25, non il ~13,5 che darebbe un fattore 1,35", async () => {
+    const { results } = await proxyOnly(new MockRoutingProvider());
+    const edge = results.find((r) => r.station.id === 44)!;
+    expect(edge.detourSource).toBe("proxy");
+    expect(edge.lateralDistanceKm).toBeCloseTo(4.99, 2);
+    expect(edge.detourKm).toBeCloseTo(2 * edge.lateralDistanceKm * PROXY_CIRCUITY_FACTOR, 1); // la risposta arrotonda a 2 decimali
+    expect(edge.detourKm).toBeLessThanOrEqual(2 * 5 * PROXY_CIRCUITY_FACTOR + 0.01);
+    expect(edge.detourKm).toBeLessThan(13);
+  });
+
+  it("ogni stazione ha lo stesso rapporto giro / (2 × linea d'aria), quale che sia la tortuosità del provider di percorsi", async () => {
+    for (const circuity of [1.0, 1.2, 1.35, 3.0]) {
+      const { results } = await proxyOnly(new MockRoutingProvider({ circuity }));
+      for (const r of results) expect(Math.abs(r.detourKm / (2 * r.lateralDistanceKm) - PROXY_CIRCUITY_FACTOR)).toBeLessThan(0.01);
+    }
+  });
+
+  it("la classifica stimata non cambia con il provider di percorsi (nessuna distorsione ereditata)", async () => {
+    const ranking = async (circuity: number) => (await proxyOnly(new MockRoutingProvider({ circuity }))).results.map((r) => [r.station.id, r.netSavings]);
+    expect(await ranking(1.0)).toEqual(await ranking(3.0));
+  });
+
+  it("la distanza «a X km da te» della scheda (metà del giro) è coerente col proxy: lateral × 1,25, non la sola linea d'aria", async () => {
+    const { results } = await proxyOnly(new MockRoutingProvider());
+    for (const r of results) expect(r.detourKm / 2).toBeCloseTo(r.lateralDistanceKm * PROXY_CIRCUITY_FACTOR, 1);
+  });
+});
+
+describe("minuti stimati della fase 1: «Intorno a me» a 22 km/h, il corridoio resta a 40 km/h", () => {
+  const nearbyRequest: NearbyRequest = {
+    origin: ORIGIN,
+    radiusKm: 5,
+    fuelType: "benzina",
+    liters: 45,
+    consumptionKmPerLiter: 15,
+    valueOfTimePerMinute: 0.15,
+    onlySelf: true,
+    maxPriceAgeHours: 72,
+    avoidMotorway: false,
+    avoidTolls: false,
+    avoidFerries: false,
+  };
+  const around = () => [
+    row({ stationId: 61, lon: 9.0, lat: 45.01, price: 1.8 }),
+    row({ stationId: 62, lon: 9.0, lat: 45.02, price: 1.82 }),
+    row({ stationId: 63, lon: 9.0, lat: 45.03, price: 1.84 }),
+    row({ stationId: 64, lon: 9.0, lat: 45.0449, price: 1.7 }),
+  ];
+  const minutesFor = (km: number, speedKmh: number) => (km / speedKmh) * 60;
+
+  it("«Intorno a me»: i minuti del giro stimato sono km / 22 km/h, i km restano 2 × distanza × 1,25", async () => {
+    const { service } = buildService(around(), { budget: "hard_limit" });
+    const { results } = await service.searchNearby(nearbyRequest);
+    expect(NEARBY_PROXY_SPEED_KMH).toBe(22);
+    for (const r of results) {
+      expect(r.detourSource).toBe("proxy");
+      expect(Math.abs(r.detourKm / (2 * r.lateralDistanceKm) - PROXY_CIRCUITY_FACTOR)).toBeLessThan(0.01);
+      expect(Math.abs(r.detourMinutes - minutesFor(r.detourKm, NEARBY_PROXY_SPEED_KMH))).toBeLessThan(0.1);
+    }
+  });
+
+  it("«In viaggio» non cambia: i minuti stimati restano a 40 km/h", async () => {
+    const { service } = buildService([...onRoute(), row({ stationId: 65, lon: 9.5, lat: 45.012, price: 1.7 })], { budget: "hard_limit" });
+    const { results } = await service.search(request);
+    const detoured = results.filter((r) => r.detourKm > 0);
+    expect(detoured.length).toBeGreaterThan(0);
+    for (const r of detoured) expect(Math.abs(r.detourMinutes - minutesFor(r.detourKm, PROXY_DETOUR_SPEED_KMH))).toBeLessThan(0.1);
+  });
+
+  it("a parità di distanza e prezzo il costo stimato del giro è più alto in «Intorno a me» (tempo più lungo): risparmio netto più basso", async () => {
+    // Stesso prezzo di riferimento (manuale) e stessa distanza dal punto o dal tracciato (~2,2 km): cambia solo la velocità del proxy.
+    const nearbyStation = row({ stationId: 71, lon: 9.0, lat: 45.0 + 2.2 / 111.19, price: 1.7 });
+    const tripStation = row({ stationId: 71, lon: 9.0 + 2.2 / 78.6, lat: 45.1, price: 1.7 }); // a est del percorso 9,0 / 45,0 → 45,2
+    const nearby = await buildService([nearbyStation], { budget: "hard_limit" }).service.searchNearby({ ...nearbyRequest, referencePriceOverride: 1.9 });
+    const trip = await buildService([tripStation], { budget: "hard_limit" }).service.search({
+      ...request,
+      destination: { lon: 9.0, lat: 45.2 },
+      maxDetourKm: 10,
+      referencePriceOverride: 1.9,
+    });
+    const a = nearby.results[0]!;
+    const b = trip.results[0]!;
+    expect(a.detourKm).toBeCloseTo(b.detourKm, 0);
+    expect(a.detourMinutes).toBeGreaterThan(b.detourMinutes * 1.7);
+    expect(a.netSavings).toBeLessThan(b.netSavings);
   });
 });

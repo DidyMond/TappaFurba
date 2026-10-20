@@ -55,14 +55,14 @@ export interface LonLat {
 /** Carburanti selezionabili in ricerca (MVP: solo i 4 tipi base, vedi MVP_VISIBLE_FUEL_TYPES). */
 export type SearchFuelType = "benzina" | "diesel" | "gpl" | "metano";
 
-export interface SearchRequest {
-  origin: LonLat;
-  destination: LonLat;
+/** Le due modalità di ricerca: «In viaggio» (lungo un percorso A→B) e «Intorno a me» (attorno a un punto). */
+export type SearchMode = "route" | "nearby";
+
+/** Parametri di calcolo comuni a entrambe le modalità (veicolo, prezzi, esclusioni del percorso). */
+export interface SearchOptions {
   fuelType: SearchFuelType;
   /** Litri da rifornire (V_refill). */
   liters: number;
-  /** Deviazione massima, km extra di A→stazione→B rispetto ad A→B (round-trip). */
-  maxDetourKm: number;
   /** Consumo del veicolo, km/L. */
   consumptionKmPerLiter: number;
   /** Valore del tempo, €/minuto. */
@@ -85,6 +85,30 @@ export interface SearchRequest {
    * cascata di P_avg (livello `manual`); se assente si usa il calcolo automatico.
    */
   referencePriceOverride?: number;
+}
+
+/** «In viaggio»: ricerca lungo il percorso da `origin` a `destination`. */
+export interface SearchRequest extends SearchOptions {
+  origin: LonLat;
+  destination: LonLat;
+  /** Deviazione massima, km extra di A→stazione→B rispetto ad A→B (round-trip). */
+  maxDetourKm: number;
+}
+
+/**
+ * Raggio di «Intorno a me», in km: fonte unica per lo slider del frontend e per la validazione dell'API (come il MIMIT,
+ * predefinito 5 e massimo 10). Il frontend può così esprimere solo ciò che l'API accetta.
+ */
+export const NEARBY_RADIUS_KM = { min: 1, max: 10, default: 5 } as const;
+
+/**
+ * «Intorno a me»: ricerca attorno a un punto (GPS o indirizzo). Non c'è un percorso di riferimento: il costo del
+ * tragitto è quello del giro completo origin→stazione→origin.
+ */
+export interface NearbyRequest extends SearchOptions {
+  origin: LonLat;
+  /** Raggio di ricerca, km in linea d'aria dal punto (limiti in `NEARBY_RADIUS_KM`). */
+  radiusKm: number;
 }
 
 /** 'proxy' = stima geometrica; 'routing' = verificata con il provider di routing. */
@@ -112,11 +136,11 @@ export interface StationResult {
   servitoOnly: boolean;
   /** ISO 8601, data di comunicazione del prezzo usato. */
   priceUpdatedAt: string;
-  /** Distanza one-way dal tracciato, km. */
+  /** Distanza one-way dal tracciato, km (in «Intorno a me»: in linea d'aria dal punto di partenza). */
   lateralDistanceKm: number;
-  /** Posizione lungo il tracciato, km dall'origine. */
+  /** Posizione lungo il tracciato, km dall'origine (in «Intorno a me»: sempre 0). */
   alongRouteKm: number;
-  /** Km extra di A→stazione→B rispetto ad A→B. */
+  /** Km extra di A→stazione→B rispetto ad A→B (in «Intorno a me»: il giro completo A→stazione→A). */
   detourKm: number;
   detourMinutes: number;
   detourSource: DetourSource;
@@ -128,8 +152,11 @@ export interface StationResult {
   netSavings: number;
 }
 
-/** `manual` = prezzo di riferimento impostato dall'utente nelle Impostazioni (sostituisce la cascata automatica). */
-export type ReferencePriceLevel = "on_route" | "corridor" | "national" | "manual";
+/**
+ * `manual` = prezzo di riferimento impostato dall'utente nelle Impostazioni (sostituisce la cascata automatica);
+ * `area` = mediana delle stazioni entro il raggio di «Intorno a me».
+ */
+export type ReferencePriceLevel = "on_route" | "corridor" | "national" | "area" | "manual";
 
 export interface ReferencePriceInfo {
   value: number;
@@ -145,14 +172,9 @@ export interface RefinementInfo {
   reason?: "budget_soft_limit" | "budget_hard_limit" | "routing_error";
 }
 
-export interface SearchResponse {
+/** Campi della risposta comuni a «In viaggio» e «Intorno a me». */
+export interface SearchResponseBase {
   searchId: string;
-  route: {
-    distanceKm: number;
-    durationMinutes: number;
-    /** Tracciato semplificato (~50 m) per la mappa: coordinate [lon, lat] con 5 decimali. */
-    geometry: Array<[number, number]>;
-  };
   referencePrice: ReferencePriceInfo;
   /** Costo marginale al km (€/km) usato nel calcolo. */
   costPerKm: number;
@@ -167,6 +189,24 @@ export interface SearchResponse {
   refinement: RefinementInfo;
   /** Stazioni escluse SOLO per l'età del prezzo (vedi `StaleStationsInfo`). Campo additivo. */
   staleStations: StaleStationsInfo;
+}
+
+/** Risposta di POST /search («In viaggio»). */
+export interface SearchResponse extends SearchResponseBase {
+  route: {
+    distanceKm: number;
+    durationMinutes: number;
+    /** Tracciato semplificato (~50 m) per la mappa: coordinate [lon, lat] con 5 decimali. */
+    geometry: Array<[number, number]>;
+  };
+}
+
+/** Risposta di POST /nearby («Intorno a me»): niente percorso, ma il punto di partenza e il raggio usati. */
+export interface NearbyResponse extends SearchResponseBase {
+  nearby: {
+    origin: LonLat;
+    radiusKm: number;
+  };
 }
 
 /**
@@ -238,6 +278,8 @@ export interface StationPriceEntry {
  */
 export interface StationDetailResponse {
   searchId: string;
+  /** Modalità della ricerca: in «Intorno a me» `detour` è il giro completo A→stazione→A e `alongRouteKm` vale 0. */
+  mode: SearchMode;
   station: StationSummary;
   /** Combinazione scelta nella ricerca (carburante e modalità), con il prezzo usato nei risultati. */
   selected: {

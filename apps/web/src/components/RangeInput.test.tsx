@@ -97,7 +97,7 @@ describe("RangeInput — stato «preso» durante il trascinamento (la scala del 
   });
 });
 
-describe("tutti gli slider dell'app usano RangeInput (deviazione nel foglio, consumo, tempo personalizzato, deviazione predefinita)", () => {
+describe("tutti gli slider dell'app usano RangeInput (deviazione e raggio nel foglio, consumo, tempo personalizzato, deviazione predefinita)", () => {
   const files = (dir: string): string[] =>
     readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
       const path = join(dir, entry.name);
@@ -111,9 +111,9 @@ describe("tutti gli slider dell'app usano RangeInput (deviazione nel foglio, con
     expect(raw.map((file) => file.slice(src.length + 1).replace(/\\/g, "/"))).toEqual(["components/RangeInput.tsx"]);
   });
 
-  it("i quattro usi ci sono: SearchForm (1) e SettingsScreen (3)", () => {
+  it("i cinque usi ci sono: SearchForm (2: deviazione massima e raggio di «Intorno a me») e SettingsScreen (3)", () => {
     const count = (file: string) => (readFileSync(join(src, file), "utf8").match(/<RangeInput/g) ?? []).length;
-    expect(count("components/SearchForm.tsx")).toBe(1);
+    expect(count("components/SearchForm.tsx")).toBe(2);
     expect(count("components/settings/SettingsScreen.tsx")).toBe(3);
   });
 });

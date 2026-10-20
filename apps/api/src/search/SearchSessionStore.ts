@@ -1,8 +1,16 @@
-import type { ReferencePriceInfo, RefinementInfo, SearchRequest, StationResult } from "@tappafurba/shared";
+import type { LonLat, ReferencePriceInfo, RefinementInfo, SearchMode, SearchOptions, StationResult } from "@tappafurba/shared";
 
 export interface SearchSession {
   id: string;
-  request: SearchRequest;
+  mode: SearchMode;
+  /** Parametri di calcolo (veicolo, prezzi, esclusioni): comuni a entrambe le modalità. */
+  request: SearchOptions;
+  /** Partenza e arrivo dei percorsi con sosta: in «Intorno a me» coincidono (giro A→stazione→A). */
+  origin: LonLat;
+  destination: LonLat;
+  /** Deviazione massima ammessa (km extra del giro); `Infinity` in «Intorno a me», dove limita il raggio e non il giro. */
+  detourLimitKm: number;
+  /** Il percorso diretto di riferimento; in «Intorno a me» è 0 km e 0 minuti, quindi la deviazione è il giro intero. */
   route: { distanceKm: number; durationMinutes: number };
   referencePrice: ReferencePriceInfo;
   costPerKm: number;

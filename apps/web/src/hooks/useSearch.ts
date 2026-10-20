@@ -1,6 +1,7 @@
-import type { RefinementInfo, SearchRequest, SearchResponse, StationResult } from "@tappafurba/shared";
+import type { RefinementInfo, StationResult } from "@tappafurba/shared";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ApiError, fetchRefinement, searchStations } from "../lib/api";
+import { ApiError, fetchRefinement, searchNearby, searchStations } from "../lib/api";
+import { isNearbyRequest, type AnySearchRequest, type AnySearchResponse } from "../lib/searchMode";
 
 export type SearchState =
   | { status: "idle" }
@@ -8,16 +9,17 @@ export type SearchState =
   | { status: "error"; error: ApiError }
   | {
       status: "success";
-      response: SearchResponse;
+      response: AnySearchResponse;
       results: StationResult[];
       refinement: RefinementInfo;
       /** Richiesta e nomi dei luoghi con cui è stata fatta la ricerca (servono alla schermata Risultati). */
-      request: SearchRequest;
+      request: AnySearchRequest;
       labels: SearchLabels;
     };
 
 export interface SearchLabels {
   origin: string;
+  /** Vuota in «Intorno a me»: lì c'è solo il punto di partenza. */
   destination: string;
   /** true se l'estremo era la posizione attuale (GPS): lo storico lo salva come flag, non come indirizzo. */
   originCurrent?: boolean;
@@ -33,7 +35,7 @@ const toApiError = (error: unknown) =>
   error instanceof ApiError ? error : new ApiError("UNKNOWN", "Si è verificato un errore imprevisto. Riprova.", 0);
 
 /**
- * Ricerca in due fasi: POST /search risponde subito con il ranking proxy; se il
+ * Ricerca in due fasi (POST /search «In viaggio» oppure POST /nearby «Intorno a me»): risponde subito con il ranking proxy; se il
  * server sta verificando le prime stazioni col routing reale ("pending"), si
  * interroga GET /search/:id finché non termina e si sostituisce l'elenco.
  * Una nuova ricerca annulla qualsiasi richiesta o polling ancora in corso.
@@ -44,15 +46,15 @@ export function useSearch() {
 
   useEffect(() => () => controllerRef.current?.abort(), []);
 
-  const search = useCallback(async (request: SearchRequest, labels: SearchLabels) => {
+  const search = useCallback(async (request: AnySearchRequest, labels: SearchLabels) => {
     controllerRef.current?.abort();
     const controller = new AbortController();
     controllerRef.current = controller;
     setState({ status: "loading" });
 
-    let response: SearchResponse;
+    let response: AnySearchResponse;
     try {
-      response = await searchStations(request, controller.signal);
+      response = isNearbyRequest(request) ? await searchNearby(request, controller.signal) : await searchStations(request, controller.signal);
     } catch (error) {
       if (!isAbort(error)) setState({ status: "error", error: toApiError(error) });
       return;

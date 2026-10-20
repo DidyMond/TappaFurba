@@ -286,3 +286,32 @@ describe("«Evita autostrada» nei decoratori di routing", () => {
     expect(getRoute).toHaveBeenCalledWith([A, B], { avoidMotorway: true });
   });
 });
+
+describe("Inversione di marcia nei decoratori di routing", () => {
+  const route: RouteResult = { distanceKm: 10, durationMinutes: 12, geometry: [[0, 0], [1, 1]] };
+  const A = { lon: 9, lat: 45 };
+  const S = { lon: 9.01, lat: 45.01 };
+
+  it("la deduplica tiene separati il giro con inversione e quello senza (sono percorsi diversi)", async () => {
+    const resolvers: Array<() => void> = [];
+    const getRoute = vi.fn(() => new Promise<RouteResult | null>((resolve) => resolvers.push(() => resolve(route))));
+    const dedup = new InFlightRoutingProvider({ getRoute } as RoutingProvider);
+
+    const calls = [dedup.getRoute([A, S, A]), dedup.getRoute([A, S, A], { continueStraight: false })];
+    expect(getRoute).toHaveBeenCalledTimes(2);
+    const again = [dedup.getRoute([A, S, A]), dedup.getRoute([A, S, A], { continueStraight: false })];
+    expect(getRoute).toHaveBeenCalledTimes(2); // ora entrambe condividono la chiamata in corso
+    resolvers.splice(0).forEach((resolve) => resolve());
+    await Promise.all([...calls, ...again]);
+  });
+
+  it("continueStraight true o assente è la stessa richiesta", async () => {
+    const resolvers: Array<() => void> = [];
+    const getRoute = vi.fn(() => new Promise<RouteResult | null>((resolve) => resolvers.push(() => resolve(route))));
+    const dedup = new InFlightRoutingProvider({ getRoute } as RoutingProvider);
+    const calls = [dedup.getRoute([A, S, A]), dedup.getRoute([A, S, A], { continueStraight: true })];
+    expect(getRoute).toHaveBeenCalledTimes(1);
+    resolvers.splice(0).forEach((resolve) => resolve());
+    await Promise.all(calls);
+  });
+});

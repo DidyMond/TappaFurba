@@ -28,8 +28,15 @@ export interface MapStation {
 
 export interface MapCanvasProps {
   token: string;
-  /** Tracciato [lon, lat]. */
+  /** Tracciato [lon, lat]; vuoto in «Intorno a me». */
   geometry: ReadonlyArray<[number, number]>;
+  /**
+   * «Intorno a me»: il punto di partenza [lon, lat]. Senza tracciato la mappa inquadra il cerchio di ricerca attorno a questo
+   * punto e lo segna con un pallino.
+   */
+  center?: readonly [number, number] | null;
+  /** «Intorno a me»: raggio di ricerca (km), disegnato come cerchio attorno a `center`. */
+  radiusKm?: number;
   /** Stazioni in ordine di priorità (la prima ha la precedenza quando i pin si sovrappongono). */
   stations: readonly MapStation[];
   selectedId: number | null;
@@ -118,9 +125,49 @@ function routeBounds(geometry: ReadonlyArray<[number, number]>): mapboxgl.LngLat
   return bounds;
 }
 
+const KM_PER_DEGREE = 111.19;
+
+/** Rettangolo che contiene il cerchio di raggio `radiusKm` attorno a `center`. */
+function circleBounds(center: readonly [number, number], radiusKm: number): mapboxgl.LngLatBounds {
+  const dLat = radiusKm / KM_PER_DEGREE;
+  const dLon = dLat / Math.max(0.01, Math.cos((center[1] * Math.PI) / 180));
+  return new mapboxgl.LngLatBounds([center[0] - dLon, center[1] - dLat], [center[0] + dLon, center[1] + dLat]);
+}
+
+/** Da inquadrare: il tracciato, oppure (in «Intorno a me») il cerchio di ricerca; null se non c'è nulla da mostrare. */
+function viewBounds(
+  geometry: ReadonlyArray<[number, number]>,
+  center: readonly [number, number] | null | undefined,
+  radiusKm: number | undefined,
+): mapboxgl.LngLatBounds | null {
+  if (geometry.length > 0) return routeBounds(geometry);
+  if (center) return circleBounds(center, radiusKm ?? 1);
+  return null;
+}
+
+/** Poligono (64 lati) del cerchio di ricerca, per disegnarlo sulla mappa. */
+function circleData(center: readonly [number, number] | null | undefined, radiusKm: number | undefined) {
+  const ring: Array<[number, number]> = [];
+  if (center && radiusKm) {
+    const dLat = radiusKm / KM_PER_DEGREE;
+    const dLon = dLat / Math.max(0.01, Math.cos((center[1] * Math.PI) / 180));
+    for (let i = 0; i <= 64; i++) {
+      const angle = (i / 64) * 2 * Math.PI;
+      ring.push([center[0] + dLon * Math.cos(angle), center[1] + dLat * Math.sin(angle)]);
+    }
+  }
+  // Senza punto (modalità «In viaggio») la sorgente resta vuota: niente poligoni con coordinate vuote.
+  return {
+    type: "FeatureCollection" as const,
+    features: ring.length > 0 ? [{ type: "Feature" as const, properties: {}, geometry: { type: "Polygon" as const, coordinates: [ring] } }] : [],
+  };
+}
+
 export default function MapCanvas({
   token,
   geometry,
+  center,
+  radiusKm,
   stations,
   selectedId,
   stopRoute,
@@ -135,8 +182,8 @@ export default function MapCanvas({
   const loadedRef = useRef(false);
 
   // I valori più recenti servono ai listener registrati all'avvio.
-  const latest = useRef({ geometry, stations, selectedId, stopRoute, onSelectStation, onDeselect, onUnavailable });
-  latest.current = { geometry, stations, selectedId, stopRoute, onSelectStation, onDeselect, onUnavailable };
+  const latest = useRef({ geometry, center, radiusKm, stations, selectedId, stopRoute, onSelectStation, onDeselect, onUnavailable });
+  latest.current = { geometry, center, radiusKm, stations, selectedId, stopRoute, onSelectStation, onDeselect, onUnavailable };
 
   /**
    * Crea solo i pin che restano visibili dopo l'anti-sovrapposizione e rimuove gli altri: con decine di stazioni
@@ -199,9 +246,10 @@ export default function MapCanvas({
 
   const fitRoute = (animate: boolean) => {
     const map = mapRef.current;
-    const { geometry: line } = latest.current;
-    if (!map || line.length === 0) return;
-    map.fitBounds(routeBounds(line), { padding: FIT_PADDING, duration: animate ? 600 : 0, maxZoom: 15 });
+    const { geometry: line, center: point, radiusKm: radius } = latest.current;
+    const bounds = viewBounds(line, point, radius);
+    if (!map || !bounds) return;
+    map.fitBounds(bounds, { padding: FIT_PADDING, duration: animate ? 600 : 0, maxZoom: 15 });
   };
 
   // Creazione della mappa (all'avvio).
@@ -217,7 +265,7 @@ export default function MapCanvas({
         container: containerRef.current,
         style: style.url,
         language: MAP_LANGUAGE,
-        bounds: latest.current.geometry.length > 0 ? routeBounds(latest.current.geometry) : undefined,
+        bounds: viewBounds(latest.current.geometry, latest.current.center, latest.current.radiusKm) ?? undefined,
         fitBoundsOptions: { padding: FIT_PADDING, maxZoom: 15 },
         attributionControl: true,
         dragRotate: false,
@@ -257,6 +305,14 @@ export default function MapCanvas({
 
     // Rotta e percorso con sosta: sopra lo stile (che qualunque sia non li contiene). Si chiama a ogni caricamento di uno stile.
     const addRouteLayers = () => {
+      map.addSource("search-area", { type: "geojson", data: circleData(latest.current.center, latest.current.radiusKm) });
+      map.addLayer({ id: "search-area-fill", type: "fill", source: "search-area", paint: { "fill-color": ROUTE_COLOR, "fill-opacity": 0.06 } });
+      map.addLayer({
+        id: "search-area-line",
+        type: "line",
+        source: "search-area",
+        paint: { "line-color": ROUTE_COLOR, "line-width": 1.5, "line-dasharray": [2, 2], "line-opacity": 0.6 },
+      });
       map.addSource("route", { type: "geojson", data: lineData(latest.current.geometry) });
       map.addSource("stop-route", { type: "geojson", data: lineData(latest.current.stopRoute ?? []) });
       map.addLayer({
@@ -366,21 +422,27 @@ export default function MapCanvas({
     for (const marker of endpointsRef.current) marker.remove();
     endpointsRef.current = [];
     const line = latest.current.geometry;
-    if (line.length < 2) return;
+    if (line.length < 2) {
+      // «Intorno a me»: un solo pallino, dove sei.
+      const point = latest.current.center;
+      if (point) endpointsRef.current = [new mapboxgl.Marker({ element: buildEndpoint(ROUTE_COLOR) }).setLngLat([point[0], point[1]]).addTo(map)];
+      return;
+    }
     endpointsRef.current = [
       new mapboxgl.Marker({ element: buildEndpoint(ROUTE_COLOR) }).setLngLat(line[0]!).addTo(map),
       new mapboxgl.Marker({ element: buildEndpoint(END_COLOR) }).setLngLat(line[line.length - 1]!).addTo(map),
     ];
   }
 
-  // Nuovo tracciato (nuova ricerca).
+  // Nuovo tracciato, o nuovo punto e raggio (nuova ricerca).
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !loadedRef.current) return;
     (map.getSource("route") as mapboxgl.GeoJSONSource | undefined)?.setData(lineData(geometry));
+    (map.getSource("search-area") as mapboxgl.GeoJSONSource | undefined)?.setData(circleData(center, radiusKm));
     syncEndpoints();
     fitRoute(false);
-  }, [geometry]);
+  }, [geometry, center, radiusKm]);
 
   // Percorso con sosta della stazione selezionata.
   useEffect(() => {
@@ -418,7 +480,7 @@ export default function MapCanvas({
         <button type="button" aria-label="Riduci" className={controlClass} onClick={() => mapRef.current?.zoomOut()}>
           <MinusIcon />
         </button>
-        <button type="button" aria-label="Ricentra il percorso" className={controlClass} onClick={() => fitRoute(true)}>
+        <button type="button" aria-label={center ? "Ricentra su di te" : "Ricentra il percorso"} className={controlClass} onClick={() => fitRoute(true)}>
           <LocateIcon />
         </button>
       </div>

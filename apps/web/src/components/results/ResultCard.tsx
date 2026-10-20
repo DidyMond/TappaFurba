@@ -14,6 +14,11 @@ interface ResultCardProps {
   /** «Info»: apre il dettaglio della stazione (Screen 3). */
   onInfo: (result: StationResult) => void;
   onNavigate: (result: StationResult) => void;
+  /**
+   * «Intorno a me»: niente percorso. In alto si mostra la distanza di sola andata «a X km» (metà del giro, che è ciò che
+   * conta nel risparmio) e nella riga in fondo il giro andata e ritorno al posto della posizione lungo il percorso.
+   */
+  nearby?: boolean;
 }
 
 /**
@@ -21,7 +26,7 @@ interface ResultCardProps {
  * (seleziona la stazione sulla mappa), quindi ammette l'elevazione in hover; Info (dettaglio) e Naviga sono
  * pulsanti propri e non propagano il click.
  */
-export function ResultCard({ result, fuelType, best, selected, onSelect, onInfo, onNavigate }: ResultCardProps) {
+export function ResultCard({ result, fuelType, best, selected, onSelect, onInfo, onNavigate, nearby = false }: ResultCardProps) {
   const { station } = result;
   const saves = result.netSavings > 0;
   const estimated = result.detourSource === "proxy";
@@ -74,10 +79,15 @@ export function ResultCard({ result, fuelType, best, selected, onSelect, onInfo,
       <div className="flex flex-wrap items-center justify-between gap-space-sm pt-space-sm border-t border-outline-variant/20">
         <span
           className="inline-flex items-center gap-1 h-[22px] px-space-md rounded-full bg-secondary/10 text-on-secondary-fixed-variant text-label-sm font-label-sm tabular-nums whitespace-nowrap"
-          title={estimated ? "Stima approssimata, in attesa del calcolo sul percorso reale" : "Calcolato sul percorso reale"}
+          title={
+            (nearby ? `Giro andata e ritorno ${approx}${formatKm(result.detourKm)}. ` : "") +
+            (estimated ? "Stima approssimata, in attesa del calcolo sul percorso reale" : "Calcolato sul percorso reale")
+          }
         >
           <RouteIcon className="w-3.5 h-3.5" />
-          {approx}+{formatKm(result.detourKm)} (+{formatDetourMinutes(result.detourMinutes)})
+          {nearby
+            ? `a ${approx}${formatKm(result.detourKm / 2)} (${approx}${formatDetourMinutes(result.detourMinutes / 2)})`
+            : `${approx}+${formatKm(result.detourKm)} (+${formatDetourMinutes(result.detourMinutes)})`}
         </span>
 
         <span
@@ -102,7 +112,8 @@ export function ResultCard({ result, fuelType, best, selected, onSelect, onInfo,
             Autostrada
           </span>
         )}
-        A {formatKm(result.alongRouteKm)} dalla partenza · prezzo del {formatShortDate(result.priceUpdatedAt)}
+        {nearby ? `Andata e ritorno ${approx}${formatKm(result.detourKm)}` : `A ${formatKm(result.alongRouteKm)} dalla partenza`} · prezzo del{" "}
+        {formatShortDate(result.priceUpdatedAt)}
       </p>
 
       <div className="flex items-center justify-between w-full">

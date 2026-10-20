@@ -5,6 +5,8 @@ import {
   createRouteProjector,
   DEFAULT_SIMPLIFY_TOLERANCE_DEG,
   DISPLAY_SIMPLIFY_TOLERANCE_DEG,
+  distanceKm,
+  pointToWkt,
   routeLengthKm,
   routeToWkt,
   simplifyRoute,
@@ -192,5 +194,23 @@ describe("tracciato da disegnare (tolleranza fine) e tracciato per i calcoli (to
     expect(drawn.length).toBeLessThan(winding.length);
     expect(drawn[0]).toEqual(winding[0]);
     expect(drawn[drawn.length - 1]).toEqual(winding[winding.length - 1]);
+  });
+});
+
+describe("pointToWkt", () => {
+  it("scrive un POINT (lon lat) a 6 decimali, per ST_GeogFromText", () => {
+    expect(pointToWkt([9.19, 45.4642035])).toBe("POINT(9.190000 45.464204)");
+  });
+});
+
+describe("distanceKm", () => {
+  it("coincide con la lunghezza geodetica turf sullo stesso tratto", () => {
+    expect(distanceKm([9.0, 45.0], [10.0, 45.0])).toBeCloseTo(routeLengthKm(eastWest), 3);
+    expect(distanceKm([0, 0], [1, 0])).toBeCloseTo(111.19, 1);
+  });
+
+  it("è zero per lo stesso punto e simmetrica", () => {
+    expect(distanceKm([9.2, 45.1], [9.2, 45.1])).toBe(0);
+    expect(distanceKm([9.0, 45.0], [9.3, 45.2])).toBeCloseTo(distanceKm([9.3, 45.2], [9.0, 45.0]), 10);
   });
 });

@@ -4,6 +4,7 @@ import {
   DETOUR_MINUTES_TOLERANCE,
   estimateProxyDetour,
   MIN_DETOUR_SPEED_KMH,
+  NEARBY_PROXY_SPEED_KMH,
   PROXY_CIRCUITY_FACTOR,
   PROXY_DETOUR_SPEED_KMH,
 } from "../src/geo/detour";
@@ -22,6 +23,30 @@ describe("estimateProxyDetour", () => {
     const { km, minutes } = estimateProxyDetour(2);
     expect(minutes).toBeCloseTo((km / PROXY_DETOUR_SPEED_KMH) * 60, 10); // 7.5 min
     expect(minutes).toBeCloseTo(7.5, 10);
+  });
+
+  it("con una velocità diversa cambiano solo i minuti, non i km", () => {
+    const base = estimateProxyDetour(2);
+    const slow = estimateProxyDetour(2, { speedKmh: 20 });
+    expect(slow.km).toBe(base.km);
+    expect(slow.minutes).toBeCloseTo((base.km / 20) * 60, 10); // 15 min
+    expect(estimateProxyDetour(2, {})).toEqual(base);
+    expect(estimateProxyDetour(2, { speedKmh: PROXY_DETOUR_SPEED_KMH })).toEqual(base);
+  });
+
+  it("«Intorno a me»: i minuti usano la velocità media dei giri brevi (22 km/h), più bassa di quella del corridoio (40 km/h)", () => {
+    expect(NEARBY_PROXY_SPEED_KMH).toBe(22);
+    expect(NEARBY_PROXY_SPEED_KMH).toBeLessThan(PROXY_DETOUR_SPEED_KMH);
+    const nearby = estimateProxyDetour(2, { speedKmh: NEARBY_PROXY_SPEED_KMH });
+    expect(nearby.km).toBeCloseTo(5, 10); // i km sono quelli di sempre: 2 × 2 × 1,25
+    expect(nearby.minutes).toBeCloseTo((5 / 22) * 60, 10); // ~13,6 min invece di 7,5
+    expect(nearby.minutes).toBeGreaterThan(estimateProxyDetour(2).minutes * 1.7);
+  });
+
+  it("rifiuta una velocità nulla, negativa o non finita", () => {
+    for (const speedKmh of [0, -5, Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect(() => estimateProxyDetour(2, { speedKmh })).toThrow(RangeError);
+    }
   });
 
   it("è monotona crescente nella distanza laterale", () => {

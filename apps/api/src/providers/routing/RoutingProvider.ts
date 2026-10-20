@@ -16,6 +16,13 @@ export interface RouteOptions {
   avoidTolls?: boolean;
   /** Percorso senza traghetti (`exclude=ferry`). */
   avoidFerries?: boolean;
+  /**
+   * `false` = ai waypoint intermedi è ammessa l'inversione di marcia (Directions `continue_straight=false`). Directions di
+   * default sulle auto non la ammette: arrivato alla stazione dovrebbe proseguire dritto e tornare indietro girando
+   * attorno a un isolato (verificato su dati reali: 4,59 km invece di 3,84 km per un giro andata e ritorno).
+   * Assente = comportamento predefinito del provider.
+   */
+  continueStraight?: boolean;
 }
 
 /** Valori Directions `exclude` dell'insieme di opzioni, in ordine fisso (così la stessa combinazione ha sempre la stessa chiave). */

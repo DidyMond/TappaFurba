@@ -4,6 +4,8 @@ import type {
   GeocodeReverseResponse,
   GeocodeSuggestion,
   LonLat,
+  NearbyRequest,
+  NearbyResponse,
   SearchRefinementResponse,
   SearchRequest,
   SearchResponse,
@@ -73,6 +75,11 @@ export async function reverseGeocode(point: LonLat): Promise<string | null> {
 
 export function searchStations(body: SearchRequest, signal: AbortSignal): Promise<SearchResponse> {
   return request<SearchResponse>("/search", { method: "POST", body: JSON.stringify(body), signal });
+}
+
+/** «Intorno a me»: le stazioni attorno a un punto. Stessa sessione e stesso ricalcolo di `searchStations`. */
+export function searchNearby(body: NearbyRequest, signal: AbortSignal): Promise<NearbyResponse> {
+  return request<NearbyResponse>("/nearby", { method: "POST", body: JSON.stringify(body), signal });
 }
 
 export function fetchRefinement(searchId: string, signal: AbortSignal): Promise<SearchRefinementResponse> {

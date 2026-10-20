@@ -96,21 +96,21 @@ export function PrivacyScreen() {
         </p>
         <List>
           <li>
-            <strong>Indirizzi che digiti.</strong> Mentre scrivi in «Partenza» o «Destinazione», il testo (e, se hai usato la posizione attuale, le tue
+            <strong>Indirizzi che digiti.</strong> Mentre scrivi in «Partenza», «Destinazione» o «Dove sei», il testo (e, se hai usato la posizione attuale, le tue
             coordinate, per proporre prima i luoghi vicini a te) va alla nostra API, che lo passa al servizio di geocoding di Mapbox per ottenere i
             suggerimenti.
           </li>
           <li>
             <strong>Posizione del dispositivo.</strong> Il browser ti chiede il permesso solo quando premi «Usa la posizione attuale». Le coordinate servono
-            come punto di partenza della ricerca e, tramite Mapbox, per ricavarne un indirizzo da mostrarti. Non si leggono in altri momenti, non vengono
+            come punto di partenza della ricerca (in viaggio o «Intorno a me») e, tramite Mapbox, per ricavarne un indirizzo da mostrarti. Non si leggono in altri momenti, non vengono
             salvate sul dispositivo (nello storico resta solo l&apos;indicazione «posizione attuale», mai le coordinate) né sul server. Puoi revocare il
             permesso in qualsiasi momento dalle impostazioni del browser.
           </li>
           <li>
-            <strong>La ricerca.</strong> Partenza e arrivo (come coordinate), carburante, litri, consumo, deviazione massima, valore del tempo e opzioni di
-            percorso vanno alla nostra API. Questa chiede il percorso a Mapbox (servizio Directions), cerca le stazioni nel nostro archivio dei prezzi e,
-            per avere prezzi più freschi, interroga l&apos;Osservaprezzi del MIMIT per zone fisse di 14 km lungo il percorso, senza inviare i tuoi dati
-            personali. Il risultato resta{" "}
+            <strong>La ricerca.</strong> Partenza e arrivo (come coordinate; in «Intorno a me» il solo punto di partenza e il raggio), carburante, litri,
+            consumo, deviazione massima, valore del tempo e opzioni di percorso vanno alla nostra API. Questa chiede il percorso a Mapbox (servizio
+            Directions), cerca le stazioni nel nostro archivio dei prezzi e, per avere prezzi più freschi, interroga l&apos;Osservaprezzi del MIMIT per
+            zone fisse di 14 km lungo il percorso (o attorno al punto), senza inviare i tuoi dati personali. Il risultato resta{" "}
             <strong>15 minuti nella memoria</strong> dell&apos;API (serve ad aprire il dettaglio di una stazione) e poi si cancella: non finisce in nessun
             database.
           </li>
